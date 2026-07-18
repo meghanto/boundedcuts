@@ -1,0 +1,13 @@
+diff --git a/rust_wrapper/CMakeLists.txt b/rust_wrapper/CMakeLists.txt
+index 02eed0a..b75ccf7 100644
+--- a/rust_wrapper/CMakeLists.txt
++++ b/rust_wrapper/CMakeLists.txt
+@@ -185,7 +185,7 @@ add_custom_target(
+     WORKING_DIRECTORY ${CLARABEL_ROOT_DIR}/rust_wrapper
+     # Commands for building the Rust library
+     COMMAND cargo build ${clarabel_c_build_flags}
+-    COMMAND cargo install cbindgen
++    COMMAND cargo install cbindgen --version 0.29.4 --locked
+     # Generate the C header
+     COMMAND cbindgen --config cbindgen.toml --quiet --crate clarabel_c --output ./headers/clarabel.h --lang c
+     # Generate the C++ header

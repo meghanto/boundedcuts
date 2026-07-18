@@ -1,0 +1,68 @@
+name: wheels
+
+on:
+  push:
+  pull_request:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build-wheel:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            os: ubuntu-latest
+            arch: x86_64
+            release_only: false
+          - label: linux-aarch64
+            os: ubuntu-latest
+            arch: aarch64
+            release_only: true
+          - label: macos-arm64
+            os: macos-14
+            arch: arm64
+            release_only: false
+          - label: macos-x86_64
+            os: macos-15-intel
+            arch: x86_64
+            release_only: false
+          - label: windows-amd64
+            os: windows-latest
+            arch: AMD64
+            release_only: false
+
+    steps:
+      - uses: actions/checkout@v5
+        if: ${{ !matrix.release_only || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}
+        with:
+          persist-credentials: false
+
+      - name: Enable Linux ARM emulation
+        if: ${{ matrix.arch == 'aarch64' && (!matrix.release_only || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release') }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build and test wheels
+        if: ${{ !matrix.release_only || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}
+        uses: pypa/cibuildwheel@v4.1.0
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BUILD: ${{ (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release') && 'cp310-* cp311-* cp312-* cp313-* cp314-*' || 'cp312-*' }}
+          CIBW_BUILD_VERBOSITY: "1"
+          CIBW_ENVIRONMENT: "CONAN_HOME={project}/.conan2"
+          CIBW_TEST_REQUIRES: "pytest numpy"
+          CIBW_TEST_COMMAND: "pytest {project}/tests_python"
+
+      - name: Upload wheels
+        if: ${{ !matrix.release_only || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: boundedcuts-${{ matrix.label }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error

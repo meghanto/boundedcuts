@@ -1,0 +1,27 @@
+# CMake build trees and compiled artifacts
+exact_solver/build*/
+build/
+cmake-build-*/
+/build-*/
+exact_solver/CMakeUserPresets.json
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+wheelhouse/
+*.egg-info/
+.conan2/
+
+# Solver-generated proof and trace artifacts
+*.ckpt
+*.cnf
+*.proof
+*.jsonl
+
+# Editor and operating-system metadata
+.DS_Store
+*.swp
+*~
