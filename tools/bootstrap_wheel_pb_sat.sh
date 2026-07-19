@@ -32,7 +32,8 @@ fi
 drat_stamp="$destination/drat-trim/.boundedcuts-build-commit"
 if [[ ! -x "$destination/drat-trim/drat-trim" || ! -f "$drat_stamp" ||
       "$(cat "$drat_stamp" 2>/dev/null || true)" != "$drat_trim_commit" ]]; then
-    make -C "$destination/drat-trim" -j"$jobs"
+    cc "$destination/drat-trim/drat-trim.c" -std=c99 -O2 \
+        -Dgetc_unlocked=getc -o "$destination/drat-trim/drat-trim"
     printf '%s\n' "$drat_trim_commit" >"$drat_stamp"
 fi
 

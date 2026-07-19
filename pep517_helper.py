@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from scikit_build_core import build as _backend
@@ -68,6 +69,8 @@ def _native_build_environment():
         output = temporary_path / "build"
         environment = os.environ.copy()
         environment["CONAN_HOME"] = str(conan_home)
+        if sys.platform == "darwin":
+            environment.setdefault("MACOSX_DEPLOYMENT_TARGET", "11.0")
 
         proof_tools = _bundled_proof_tools(temporary_path, environment)
 
@@ -114,10 +117,15 @@ def _native_build_environment():
         ]
         previous_args = os.environ.get("SKBUILD_CMAKE_ARGS")
         previous_conan_home = os.environ.get("CONAN_HOME")
+        previous_macos_target = os.environ.get("MACOSX_DEPLOYMENT_TARGET")
         if previous_args:
             baseline.extend(argument for argument in previous_args.split(";") if argument)
         os.environ["SKBUILD_CMAKE_ARGS"] = ";".join(baseline)
         os.environ["CONAN_HOME"] = str(conan_home)
+        if sys.platform == "darwin":
+            os.environ["MACOSX_DEPLOYMENT_TARGET"] = environment[
+                "MACOSX_DEPLOYMENT_TARGET"
+            ]
         try:
             yield
         finally:
@@ -129,6 +137,11 @@ def _native_build_environment():
                 os.environ.pop("CONAN_HOME", None)
             else:
                 os.environ["CONAN_HOME"] = previous_conan_home
+            if sys.platform == "darwin":
+                if previous_macos_target is None:
+                    os.environ.pop("MACOSX_DEPLOYMENT_TARGET", None)
+                else:
+                    os.environ["MACOSX_DEPLOYMENT_TARGET"] = previous_macos_target
 
 
 def build_wheel(*args, **kwargs):
