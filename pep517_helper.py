@@ -88,6 +88,8 @@ def _native_build_environment():
                 "--build=missing",
                 "--settings",
                 "build_type=Release",
+                "--options",
+                "boost/*:header_only=True",
                 "--output-folder",
                 str(output),
             ],
@@ -115,6 +117,11 @@ def _native_build_environment():
             f"-DCUTWIDTH_BUNDLED_CADICAL_LICENSE:FILEPATH={proof_tools['cadical_license']}",
             f"-DCUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE:FILEPATH={proof_tools['checker_license']}",
         ]
+        if sys.platform == "darwin":
+            baseline.append(
+                "-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING="
+                + environment["MACOSX_DEPLOYMENT_TARGET"]
+            )
         previous_args = os.environ.get("SKBUILD_CMAKE_ARGS")
         previous_conan_home = os.environ.get("CONAN_HOME")
         previous_macos_target = os.environ.get("MACOSX_DEPLOYMENT_TARGET")
