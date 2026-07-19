@@ -23,10 +23,11 @@ Linux systems:
 pip install boundedcuts
 ```
 
-Installing a compatible wheel only unpacks its native extension and bundled
-CLI; it does not compile locally. A source installation requires a C++20
-toolchain and lets the build backend restore pinned Boost and Dispenso packages
-with Conan:
+Installing a compatible wheel only unpacks its native extension, bundled CLI,
+and proof tools; it does not compile locally. A source installation requires a
+C++20 toolchain and lets the build backend restore pinned Boost and Dispenso
+packages with Conan. It also builds the pinned proof tools; native Windows
+source builds therefore require Git for Windows and MSYS2 MINGW64:
 
 ```sh
 pip install .
@@ -53,6 +54,13 @@ A C-contiguous `uint32[m, 2]` array is scanned directly without constructing
 Python edge objects or an intermediate C++ edge list. The graph then owns its
 normalized adjacency representation, and the native solve releases the Python
 GIL. The package and its wheels are licensed under GPL-3.0-only.
+
+Every wheel carries pinned CaDiCaL 2.1.3 and DRAT-trim executables. When
+`pb-sat-root` is selected, the Python API and packaged CLI locate them
+automatically; explicit paths still override the bundled tools. CaDiCaL's
+UNSAT result never changes a certified bound until the independent DRAT-trim
+check succeeds. Use `boundedcuts.proof_tools()` to inspect their paths and
+`boundedcuts.proof_tool_provenance()` for exact upstream revisions.
 
 ## Portable build
 

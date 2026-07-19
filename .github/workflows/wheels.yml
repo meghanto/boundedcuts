@@ -55,7 +55,7 @@ jobs:
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BUILD: ${{ (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release') && 'cp310-* cp311-* cp312-* cp313-* cp314-*' || 'cp312-*' }}
           CIBW_BUILD_VERBOSITY: "1"
-          CIBW_ENVIRONMENT: "CONAN_HOME={project}/.conan2"
+          CIBW_ENVIRONMENT: "CONAN_HOME=$(pwd)/.conan2 BOUNDEDCUTS_PB_ROOT=$(pwd)/.pb-sat"
           CIBW_TEST_REQUIRES: "pytest numpy"
           CIBW_TEST_COMMAND: "pytest {project}/tests_python"
 

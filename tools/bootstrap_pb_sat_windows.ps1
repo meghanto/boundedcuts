@@ -136,7 +136,11 @@ jobs="$BOUNDEDCUTS_PB_JOBS"
 
 cd "$root/cadical"
 cadical_rebuild=0
-if [[ ! -x build/cadical.exe || ! -f build/libcadical.a ]]; then
+cadical_commit="$BOUNDEDCUTS_CADICAL_COMMIT"
+drat_trim_commit="$BOUNDEDCUTS_DRAT_TRIM_COMMIT"
+if [[ ! -x build/cadical.exe || ! -f build/libcadical.a ||
+      ! -f build/.boundedcuts-commit ||
+      "$(cat build/.boundedcuts-commit 2>/dev/null || true)" != "$cadical_commit" ]]; then
     cadical_rebuild=1
 elif ldd build/cadical.exe | grep -Eq 'lib(gcc|stdc\+\+|winpthread)'; then
     cadical_rebuild=1
@@ -145,11 +149,28 @@ if [[ "$cadical_rebuild" == 1 ]]; then
     rm -rf build
     ./configure -static
     make -j"$jobs" cadical
+    printf '%s\n' "$cadical_commit" > build/.boundedcuts-commit
+fi
+if ldd build/cadical.exe | grep -Eq 'lib(gcc|stdc\+\+|winpthread)'; then
+    echo "CaDiCaL still depends on an MSYS2 runtime DLL" >&2
+    exit 1
 fi
 
 cd "$root/drat-trim"
-if [[ ! -x drat-trim.exe ]]; then
-    gcc drat-trim.c -std=c99 -O2 -Dgetc_unlocked=getc -o drat-trim.exe
+drat_build_revision="${drat_trim_commit}-boundedcuts-binary-proof-v1"
+if [[ ! -x drat-trim.exe || ! -f .boundedcuts-build-commit ||
+      "$(cat .boundedcuts-build-commit 2>/dev/null || true)" != "$drat_build_revision" ]]; then
+    # Upstream opens binary DRAT with C text mode. On Windows, byte 0x1a then
+    # behaves as EOF. Compile an untracked portability copy that uses "rb".
+    sed 's/fopen (argv\[2\], "r")/fopen (argv[2], "rb")/g' \
+        drat-trim.c > drat-trim-boundedcuts.c
+    test "$(grep -c 'fopen (argv\[2\], "rb")' drat-trim-boundedcuts.c)" = 2
+    gcc drat-trim-boundedcuts.c -std=c99 -O2 -Dgetc_unlocked=getc -o drat-trim.exe
+    printf '%s\n' "$drat_build_revision" > .boundedcuts-build-commit
+fi
+if ldd drat-trim.exe | grep -Eq 'lib(gcc|stdc\+\+|winpthread)'; then
+    echo "DRAT-trim depends on an MSYS2 runtime DLL" >&2
+    exit 1
 fi
 '@
 Set-Content -LiteralPath $temporaryWindowsPath -Value $buildScript -Encoding Ascii
@@ -157,12 +178,16 @@ Set-Content -LiteralPath $temporaryWindowsPath -Value $buildScript -Encoding Asc
 $oldDestination = $env:BOUNDEDCUTS_PB_DESTINATION
 $oldGitDirectory = $env:BOUNDEDCUTS_PB_GIT_DIRECTORY
 $oldJobs = $env:BOUNDEDCUTS_PB_JOBS
+$oldCadicalCommit = $env:BOUNDEDCUTS_CADICAL_COMMIT
+$oldDratTrimCommit = $env:BOUNDEDCUTS_DRAT_TRIM_COMMIT
 $oldMsystem = $env:MSYSTEM
 $oldChereInvoking = $env:CHERE_INVOKING
 try {
     $env:BOUNDEDCUTS_PB_DESTINATION = $Destination
     $env:BOUNDEDCUTS_PB_GIT_DIRECTORY = Split-Path -Parent $git
     $env:BOUNDEDCUTS_PB_JOBS = $Jobs.ToString()
+    $env:BOUNDEDCUTS_CADICAL_COMMIT = $cadicalCommit
+    $env:BOUNDEDCUTS_DRAT_TRIM_COMMIT = $dratTrimCommit
     $env:MSYSTEM = "MINGW64"
     $env:CHERE_INVOKING = "1"
     Invoke-Checked $msysBash @($temporaryMsysPath)
@@ -171,6 +196,8 @@ finally {
     $env:BOUNDEDCUTS_PB_DESTINATION = $oldDestination
     $env:BOUNDEDCUTS_PB_GIT_DIRECTORY = $oldGitDirectory
     $env:BOUNDEDCUTS_PB_JOBS = $oldJobs
+    $env:BOUNDEDCUTS_CADICAL_COMMIT = $oldCadicalCommit
+    $env:BOUNDEDCUTS_DRAT_TRIM_COMMIT = $oldDratTrimCommit
     $env:MSYSTEM = $oldMsystem
     $env:CHERE_INVOKING = $oldChereInvoking
     Remove-Item -LiteralPath $temporaryWindowsPath -Force -ErrorAction SilentlyContinue

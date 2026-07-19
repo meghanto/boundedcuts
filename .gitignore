@@ -14,6 +14,7 @@ dist/
 wheelhouse/
 *.egg-info/
 .conan2/
+.pb-sat/
 
 # Solver-generated proof and trace artifacts
 *.ckpt

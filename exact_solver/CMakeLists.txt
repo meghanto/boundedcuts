@@ -244,6 +244,10 @@ if(CUTWIDTH_BUILD_TESTS)
 endif()
 
 option(CUTWIDTH_BUILD_PYTHON "Build Python bindings using nanobind" OFF)
+set(CUTWIDTH_BUNDLED_CADICAL "" CACHE FILEPATH "CaDiCaL executable bundled in Python wheels")
+set(CUTWIDTH_BUNDLED_DRAT_TRIM "" CACHE FILEPATH "DRAT-trim executable bundled in Python wheels")
+set(CUTWIDTH_BUNDLED_CADICAL_LICENSE "" CACHE FILEPATH "CaDiCaL license bundled in Python wheels")
+set(CUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE "" CACHE FILEPATH "DRAT-trim license bundled in Python wheels")
 if(CUTWIDTH_BUILD_PYTHON)
     set_property(TARGET cutwidth_solver PROPERTY POSITION_INDEPENDENT_CODE ON)
     find_package(Python 3.10 COMPONENTS Interpreter Development.Module REQUIRED)
@@ -255,4 +259,18 @@ if(CUTWIDTH_BUILD_PYTHON)
         LIBRARY DESTINATION boundedcuts
         RUNTIME DESTINATION boundedcuts)
     install(TARGETS cutwidth_exact RUNTIME DESTINATION boundedcuts)
+
+    foreach(required_path IN ITEMS
+            CUTWIDTH_BUNDLED_CADICAL CUTWIDTH_BUNDLED_DRAT_TRIM
+            CUTWIDTH_BUNDLED_CADICAL_LICENSE CUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE)
+        if("${${required_path}}" STREQUAL "" OR NOT EXISTS "${${required_path}}")
+            message(FATAL_ERROR "${required_path} must name an existing file for Python wheels")
+        endif()
+    endforeach()
+    install(PROGRAMS "${CUTWIDTH_BUNDLED_CADICAL}" "${CUTWIDTH_BUNDLED_DRAT_TRIM}"
+        DESTINATION boundedcuts/bin)
+    install(FILES "${CUTWIDTH_BUNDLED_CADICAL_LICENSE}"
+        DESTINATION boundedcuts/licenses RENAME CaDiCaL-LICENSE.txt)
+    install(FILES "${CUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE}"
+        DESTINATION boundedcuts/licenses RENAME DRAT-trim-LICENSE.txt)
 endif()

@@ -48,8 +48,11 @@ sdist.include = [
     "CMakeLists.txt",
     "LICENSE",
     "README.md",
+    "THIRD_PARTY_NOTICES.md",
     "exact_solver/**",
     "pep517_helper.py",
     "src/boundedcuts/**",
     "tests_python/**",
+    "tools/bootstrap_wheel_pb_sat.sh",
+    "tools/bootstrap_pb_sat_windows.ps1",
 ]

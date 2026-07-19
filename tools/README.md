@@ -4,6 +4,9 @@ The default BoundedCuts build does not need these tools. They bootstrap pinned
 external solvers used by optional certified SDP and PB/SAT backends; all build
 artifacts are written outside this repository.
 
+Published Python wheels already contain the pinned CaDiCaL and DRAT-trim
+executables. These bootstrap scripts are for native/source builds and auditing.
+
 - `bootstrap_pb_sat.sh DESTINATION` fetches and builds pinned Kissat, CaDiCaL,
   and DRAT-trim revisions.
 - `bootstrap_pb_sat_windows.ps1 -Destination DIRECTORY` builds the pinned

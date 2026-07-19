@@ -1,0 +1,14 @@
+{
+  "cadical": {
+    "version": "2.1.3",
+    "commit": "f13d74439a5b5c963ac5b02d05ce93a8098018b8",
+    "source": "https://github.com/arminbiere/cadical",
+    "license": "MIT"
+  },
+  "drat_trim": {
+    "commit": "2e3b2dc0ecf938addbd779d42877b6ed69d9a985",
+    "source": "https://github.com/marijnheule/drat-trim",
+    "license": "MIT",
+    "windows_patch": "open binary DRAT input with mode rb"
+  }
+}

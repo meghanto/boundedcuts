@@ -15,6 +15,47 @@ from scikit_build_core import build as _backend
 _ROOT = Path(__file__).resolve().parent
 
 
+def _bundled_proof_tools(temporary_path: Path, environment: dict[str, str]):
+    destination = Path(
+        environment.get("BOUNDEDCUTS_PB_ROOT", temporary_path / "pb-sat")
+    ).resolve()
+    jobs = str(max(1, os.cpu_count() or 1))
+    if os.name == "nt":
+        subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", str(_ROOT / "tools" / "bootstrap_pb_sat_windows.ps1"),
+                "-Destination", str(destination), "-Jobs", jobs,
+            ],
+            cwd=_ROOT,
+            env=environment,
+            check=True,
+        )
+        suffix = ".exe"
+    else:
+        subprocess.run(
+            ["bash", str(_ROOT / "tools" / "bootstrap_wheel_pb_sat.sh"),
+             str(destination), jobs],
+            cwd=_ROOT,
+            env=environment,
+            check=True,
+        )
+        suffix = ""
+
+    cadical_root = destination / "cadical"
+    checker_root = destination / "drat-trim"
+    paths = {
+        "cadical": cadical_root / "build" / f"cadical{suffix}",
+        "checker": checker_root / f"drat-trim{suffix}",
+        "cadical_license": cadical_root / "LICENSE",
+        "checker_license": checker_root / "LICENSE",
+    }
+    missing = [str(path) for path in paths.values() if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"bundled proof-tool artifacts are missing: {missing}")
+    return paths
+
+
 @contextmanager
 def _native_build_environment():
     conan = shutil.which("conan")
@@ -27,6 +68,8 @@ def _native_build_environment():
         output = temporary_path / "build"
         environment = os.environ.copy()
         environment["CONAN_HOME"] = str(conan_home)
+
+        proof_tools = _bundled_proof_tools(temporary_path, environment)
 
         subprocess.run(
             [conan, "profile", "detect", "--force"],
@@ -64,6 +107,10 @@ def _native_build_environment():
             "-DCUTWIDTH_ENABLE_HIGHS=OFF",
             "-DCUTWIDTH_ENABLE_ONETBB=OFF",
             "-DCUTWIDTH_ENABLE_SDP_PROTOTYPE=OFF",
+            f"-DCUTWIDTH_BUNDLED_CADICAL:FILEPATH={proof_tools['cadical']}",
+            f"-DCUTWIDTH_BUNDLED_DRAT_TRIM:FILEPATH={proof_tools['checker']}",
+            f"-DCUTWIDTH_BUNDLED_CADICAL_LICENSE:FILEPATH={proof_tools['cadical_license']}",
+            f"-DCUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE:FILEPATH={proof_tools['checker_license']}",
         ]
         previous_args = os.environ.get("SKBUILD_CMAKE_ARGS")
         previous_conan_home = os.environ.get("CONAN_HOME")

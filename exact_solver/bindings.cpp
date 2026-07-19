@@ -1,5 +1,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -29,6 +31,14 @@ struct SolveOptions {
     std::size_t memory_budget_bytes = std::size_t{16} * 1024U * 1024U * 1024U;
     std::vector<std::string> adaptive_arms{"bounds", "dfs", "alns", "sdp", "residual-dp"};
     bool verify = true;
+
+    // pb-sat-root fields
+    std::string pb_sat_root_solver;
+    std::string pb_sat_root_checker;
+    std::string pb_sat_root_dir;
+    double pb_sat_root_timeout = 0.0;
+    std::optional<std::size_t> pb_sat_root_q;
+    std::uint32_t pb_sat_root_max_gap = 2;
 };
 
 struct SolveResult {
@@ -39,6 +49,14 @@ struct SolveResult {
     double runtime_seconds = 0.0;
     std::uint64_t nodes_expanded = 0;
     bool verified = false;
+    std::uint64_t pb_sat_root_attempts = 0;
+    std::uint64_t pb_sat_root_certified_unsat = 0;
+    std::uint64_t pb_sat_root_checker_successes = 0;
+    std::uint32_t pb_sat_root_active_threshold = 0;
+    std::uint64_t pb_sat_root_active_cardinality = 0;
+    double pb_sat_root_solver_seconds = 0.0;
+    double pb_sat_root_checker_seconds = 0.0;
+    std::string pb_sat_root_last_result;
     nb::object ordering;
 };
 
@@ -54,10 +72,20 @@ void validate(const SolveOptions& options) {
         throw std::invalid_argument("controller must be 'static' or 'adaptive'");
     if (options.controller == "adaptive" && !contains(options.adaptive_arms, "dfs"))
         throw std::invalid_argument("adaptive_arms must contain 'dfs'");
+    if (!std::isfinite(options.pb_sat_root_timeout) || options.pb_sat_root_timeout < 0.0)
+        throw std::invalid_argument("pb_sat_root_timeout must be finite and non-negative");
     for (const auto& arm : options.adaptive_arms) {
         if (arm != "bounds" && arm != "dfs" && arm != "alns" && arm != "sdp" &&
             arm != "residual-dp" && arm != "pb-sat-root")
             throw std::invalid_argument("unknown adaptive arm: " + arm);
+    }
+    if (contains(options.adaptive_arms, "pb-sat-root")) {
+        if (options.controller != "adaptive")
+            throw std::invalid_argument("pb-sat-root requires the adaptive controller");
+        if (options.pb_sat_root_solver.empty() || options.pb_sat_root_checker.empty() ||
+            options.pb_sat_root_dir.empty() || options.pb_sat_root_timeout <= 0.0)
+            throw std::invalid_argument(
+                "pb-sat-root requires solver, checker, directory, and a positive timeout");
     }
 }
 
@@ -80,6 +108,22 @@ cutwidth::OptimizerV2Options native_options(const SolveOptions& input) {
     options.adaptive_arms = input.adaptive_arms;
     options.sdp_schedule = cutwidth::sdp::SdpSchedule::off;
 
+    options.pb_sat_root_solver = input.pb_sat_root_solver;
+    options.pb_sat_root_checker = input.pb_sat_root_checker;
+    options.pb_sat_root_dir = input.pb_sat_root_dir;
+    if (input.pb_sat_root_timeout > 0.0) {
+        constexpr double maximum = static_cast<double>(
+            std::numeric_limits<std::chrono::milliseconds::rep>::max());
+        const double milliseconds = std::ceil(input.pb_sat_root_timeout * 1000.0);
+        if (milliseconds > maximum) throw std::invalid_argument("pb_sat_root_timeout is too large");
+        options.pb_sat_root_timeout = std::chrono::milliseconds(
+            static_cast<std::chrono::milliseconds::rep>(milliseconds));
+    } else {
+        options.pb_sat_root_timeout = std::chrono::milliseconds(0);
+    }
+    options.pb_sat_root_q = input.pb_sat_root_q;
+    options.pb_sat_root_max_gap = input.pb_sat_root_max_gap;
+
     if (options.controller == cutwidth::ControllerMode::adaptive) {
         options.use_partial_bounds = contains(options.adaptive_arms, "bounds");
         if (contains(options.adaptive_arms, "alns"))
@@ -101,6 +145,8 @@ nb::object numpy_ordering(const std::vector<cutwidth::Graph::Vertex>& ordering) 
 }
 
 SolveResult solve(const cutwidth::Graph& graph, const SolveOptions& input) {
+    if (input.pb_sat_root_q && *input.pb_sat_root_q > graph.size())
+        throw std::invalid_argument("pb_sat_root_q exceeds the graph vertex count");
     auto options = native_options(input);
     const auto started = std::chrono::steady_clock::now();
     cutwidth::OptimizerV2Result raw;
@@ -117,6 +163,14 @@ SolveResult solve(const cutwidth::Graph& graph, const SolveOptions& input) {
     result.runtime_seconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - started).count();
     result.nodes_expanded = raw.stats.nodes_expanded;
+    result.pb_sat_root_attempts = raw.stats.pb_sat_root_attempts;
+    result.pb_sat_root_certified_unsat = raw.stats.pb_sat_root_certified_unsat;
+    result.pb_sat_root_checker_successes = raw.stats.pb_sat_root_checker_successes;
+    result.pb_sat_root_active_threshold = raw.stats.pb_sat_root_active_threshold;
+    result.pb_sat_root_active_cardinality = raw.stats.pb_sat_root_active_cardinality;
+    result.pb_sat_root_solver_seconds = raw.stats.pb_sat_root_solver_seconds;
+    result.pb_sat_root_checker_seconds = raw.stats.pb_sat_root_checker_seconds;
+    result.pb_sat_root_last_result = raw.stats.pb_sat_root_last_result;
     if (input.verify) {
         if (!graph.validate_ordering(raw.ordering) ||
             graph.ordering_cutwidth(raw.ordering) != raw.upper_bound)
@@ -157,7 +211,13 @@ NB_MODULE(_boundedcuts, module) {
         .def_rw("controller", &SolveOptions::controller)
         .def_rw("memory_budget_bytes", &SolveOptions::memory_budget_bytes)
         .def_rw("adaptive_arms", &SolveOptions::adaptive_arms)
-        .def_rw("verify", &SolveOptions::verify);
+        .def_rw("verify", &SolveOptions::verify)
+        .def_rw("pb_sat_root_solver", &SolveOptions::pb_sat_root_solver)
+        .def_rw("pb_sat_root_checker", &SolveOptions::pb_sat_root_checker)
+        .def_rw("pb_sat_root_dir", &SolveOptions::pb_sat_root_dir)
+        .def_rw("pb_sat_root_timeout", &SolveOptions::pb_sat_root_timeout)
+        .def_rw("pb_sat_root_q", &SolveOptions::pb_sat_root_q)
+        .def_rw("pb_sat_root_max_gap", &SolveOptions::pb_sat_root_max_gap);
 
     nb::class_<SolveResult>(module, "SolveResult")
         .def_ro("optimal", &SolveResult::optimal)
@@ -167,6 +227,14 @@ NB_MODULE(_boundedcuts, module) {
         .def_ro("runtime_seconds", &SolveResult::runtime_seconds)
         .def_ro("nodes_expanded", &SolveResult::nodes_expanded)
         .def_ro("verified", &SolveResult::verified)
+        .def_ro("pb_sat_root_attempts", &SolveResult::pb_sat_root_attempts)
+        .def_ro("pb_sat_root_certified_unsat", &SolveResult::pb_sat_root_certified_unsat)
+        .def_ro("pb_sat_root_checker_successes", &SolveResult::pb_sat_root_checker_successes)
+        .def_ro("pb_sat_root_active_threshold", &SolveResult::pb_sat_root_active_threshold)
+        .def_ro("pb_sat_root_active_cardinality", &SolveResult::pb_sat_root_active_cardinality)
+        .def_ro("pb_sat_root_solver_seconds", &SolveResult::pb_sat_root_solver_seconds)
+        .def_ro("pb_sat_root_checker_seconds", &SolveResult::pb_sat_root_checker_seconds)
+        .def_ro("pb_sat_root_last_result", &SolveResult::pb_sat_root_last_result)
         .def_ro("ordering", &SolveResult::ordering);
 
     module.def("solve", &solve, nb::arg("graph"), nb::arg("options"));
@@ -178,6 +246,7 @@ NB_MODULE(_boundedcuts, module) {
         result["lagrangian_bounds"] = true;
         result["sdp_formulation"] = true;
         result["sdp_certificate_verifier"] = true;
+        result["pb_sat_root"] = true;
 #ifdef CUTWIDTH_HAVE_CLARABEL_SDP
         result["clarabel"] = true;
 #else
