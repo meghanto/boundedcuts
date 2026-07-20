@@ -154,9 +154,9 @@ if(CUTWIDTH_CADICAL_ROOT)
     set_property(TARGET cadical PROPERTY POSITION_INDEPENDENT_CODE ON)
     target_include_directories(cadical PUBLIC "${CUTWIDTH_CADICAL_ROOT}/src")
     target_compile_definitions(cadical PRIVATE NBUILD)
-    if(APPLE)
-        # CaDiCaL's configure probe emits this on macOS versions whose SDK
-        # does not declare closefrom(3).
+    if(UNIX)
+        # Reproduce CaDiCaL's configure fallback on wheel SDKs/libcs that do
+        # not declare closefrom(3).  This path is irrelevant to in-memory use.
         target_compile_definitions(cadical PRIVATE NCLOSEFROM)
     endif()
     if(MSVC)

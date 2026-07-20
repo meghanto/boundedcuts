@@ -140,7 +140,6 @@ DecisionResult decide_cutwidth(const Graph& graph, std::uint32_t threshold,
                     ? std::chrono::milliseconds{1} : checker_options.time_limit - used;
             }
             if (has_memory_proof) {
-                const auto check_started = Clock::now();
                 DratCheckerResult checked = verify_proof_in_memory(
                     encoded.formula, native.added_unit_clauses,
                     native.proof_bytes, checker_options.time_limit

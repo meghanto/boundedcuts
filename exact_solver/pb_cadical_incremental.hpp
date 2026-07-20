@@ -12,7 +12,11 @@
 #include <limits>
 
 #ifdef CUTWIDTH_HAVE_CADICAL
+#ifdef _MSC_VER
+#include "msvc_compat/cadical_msvc.hpp"
+#endif
 #include <cadical.hpp>
+#include <tracer.hpp>
 #endif
 
 namespace cutwidth::pb {
