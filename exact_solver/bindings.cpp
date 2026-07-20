@@ -94,10 +94,6 @@ void validate(const SolveOptions& options) {
                 options.pb_sat_root_dir.empty() || options.pb_sat_root_timeout <= 0.0)
                 throw std::invalid_argument(
                     "pb-sat-root requires solver, checker, directory, and a positive timeout in external mode");
-        } else {
-            if (options.pb_sat_root_timeout <= 0.0)
-                throw std::invalid_argument(
-                    "pb-sat-root requires a positive timeout in embedded mode");
         }
     }
 }

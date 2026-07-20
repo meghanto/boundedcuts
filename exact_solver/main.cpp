@@ -1647,9 +1647,9 @@ int run(const CliOptions& cli) {
                         throw std::invalid_argument("external pb-sat-root checker path must be specified");
                     if (cli.pb_sat_root_dir.empty())
                         throw std::invalid_argument("external pb-sat-root artifact directory must be specified");
+                    if (cli.pb_sat_root_timeout.count() <= 0)
+                        throw std::invalid_argument("external pb-sat-root timeout must be positive");
                 }
-                if (cli.pb_sat_root_timeout.count() <= 0)
-                    throw std::invalid_argument("pb-sat-root timeout must be positive when the arm is enabled");
                 if (cli.pb_sat_root_q && *cli.pb_sat_root_q > graph.size())
                     throw std::invalid_argument("pb-sat-root q exceeds the graph vertex count");
             }
