@@ -176,10 +176,6 @@ def solve(
                 options.pb_sat_root_dir = temporary_proof_directory.name
             if options.pb_sat_root_timeout <= 0.0:
                 options.pb_sat_root_timeout = 90.0
-        else:
-            if options.pb_sat_root_timeout <= 0.0:
-                options.pb_sat_root_timeout = 90.0
-
     try:
         return _native_solve(graph, options)
     finally:

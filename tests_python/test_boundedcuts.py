@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import boundedcuts
+from boundedcuts import cli as boundedcuts_cli
 
 
 def test_uint32_contiguous_fast_path() -> None:
@@ -158,7 +159,7 @@ def test_python_embedded_pb_sat_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert captured["solver"] == ""
     assert captured["checker"] == ""
     assert captured["directory"] == ""
-    assert captured["timeout"] == 90.0
+    assert captured["timeout"] == 0.0
     assert options.pb_sat_root_solver == ""
     assert options.pb_sat_root_checker == ""
     assert options.pb_sat_root_dir == ""
@@ -174,6 +175,66 @@ def test_cli_invocation() -> None:
     )
     assert completed.returncode == 0
     assert "Usage:" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("backend_arguments", "expected_timeout"),
+    [
+        ([], None),
+        (["--pb-sat-root-backend", "external"], "90"),
+        (["--pb-sat-root-timeout", "17"], "17"),
+    ],
+)
+def test_cli_pb_timeout_defaults_follow_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_arguments: list[str],
+    expected_timeout: str | None,
+) -> None:
+    captured: list[str] = []
+
+    class ExecCalled(Exception):
+        pass
+
+    def fake_execv(_path: str, command: list[str]) -> None:
+        captured.extend(command)
+        raise ExecCalled
+
+    def fake_run(command: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
+        assert not check
+        captured.extend(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(boundedcuts_cli, "executable", lambda: Path("/fake/cutwidth_exact"))
+    monkeypatch.setattr(boundedcuts_cli.os, "execv", fake_execv)
+    monkeypatch.setattr(boundedcuts_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "boundedcuts",
+            "graph.edgelist",
+            "--adaptive-arms",
+            "dfs,pb-sat-root",
+            *backend_arguments,
+            "--pb-sat-root-solver",
+            "solver",
+            "--pb-sat-root-checker",
+            "checker",
+            "--pb-sat-root-dir",
+            "proofs",
+        ],
+    )
+
+    try:
+        assert boundedcuts_cli.main() == 0
+    except ExecCalled:
+        pass
+
+    if expected_timeout is None:
+        assert "--pb-sat-root-timeout" not in captured
+    else:
+        index = captured.index("--pb-sat-root-timeout")
+        assert captured[index + 1] == expected_timeout
 
 
 def test_cli_defaults_to_embedded_proof_tools(tmp_path: Path) -> None:

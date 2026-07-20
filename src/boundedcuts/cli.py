@@ -33,9 +33,9 @@ def main() -> int:
             index = arguments.index("--pb-sat-root-backend")
             if index + 1 < len(arguments):
                 backend = arguments[index + 1]
-        if "--pb-sat-root-timeout" not in arguments:
-            arguments.extend(("--pb-sat-root-timeout", "90"))
         if backend == "external":
+            if "--pb-sat-root-timeout" not in arguments:
+                arguments.extend(("--pb-sat-root-timeout", "90"))
             missing_solver = "--pb-sat-root-solver" not in arguments
             missing_checker = "--pb-sat-root-checker" not in arguments
             if missing_solver or missing_checker:
