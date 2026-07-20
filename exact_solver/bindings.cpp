@@ -67,6 +67,29 @@ struct SolveResult {
     std::uint32_t pb_sat_root_ordering_maximum_frontier = 0;
     std::uint32_t pb_sat_root_ordering_bandwidth = 0;
     std::uint64_t pb_sat_root_ordering_total_edge_span = 0;
+    bool sdp_attempted = false;
+    bool sdp_available = false;
+    bool sdp_raw_converged = false;
+    double sdp_primal_residual = 0.0;
+    std::optional<std::uint32_t> sdp_certified_lower_bound;
+    double sdp_primal_objective = 0.0;
+    double sdp_dual_objective = 0.0;
+    double sdp_dual_residual = 0.0;
+    double sdp_solve_seconds = 0.0;
+    std::size_t sdp_solver_iterations = 0;
+    int sdp_solver_status = -1;
+    std::size_t sdp_bisection_calls = 0;
+    std::size_t sdp_triangle_cuts = 0;
+    std::uint64_t sdp_state_requests = 0;
+    std::uint64_t sdp_state_certified = 0;
+    std::uint64_t sdp_state_prunes = 0;
+    std::uint64_t sdp_state_cache_hits = 0;
+    std::uint64_t sdp_state_calls = 0;
+    std::uint64_t sdp_state_busy = 0;
+    std::uint64_t sdp_state_budget_rejections = 0;
+    std::uint64_t sdp_state_uncertified = 0;
+    std::uint64_t sdp_state_dimension_rejections = 0;
+    std::size_t sdp_state_preferred_max_dimension = 0;
     nb::object ordering;
 };
 
@@ -125,7 +148,11 @@ cutwidth::OptimizerV2Options native_options(const SolveOptions& input) {
         : cutwidth::ControllerMode::static_policy;
     options.memory_budget_bytes = input.memory_budget_bytes;
     options.adaptive_arms = input.adaptive_arms;
-    options.sdp_schedule = cutwidth::sdp::SdpSchedule::off;
+    if (input.controller == "adaptive" && contains(input.adaptive_arms, "sdp")) {
+        options.sdp_schedule = cutwidth::sdp::SdpSchedule::adaptive;
+    } else {
+        options.sdp_schedule = cutwidth::sdp::SdpSchedule::off;
+    }
 
     options.pb_sat_root_solver = input.pb_sat_root_solver;
     options.pb_sat_root_checker = input.pb_sat_root_checker;
@@ -204,6 +231,29 @@ SolveResult solve(const cutwidth::Graph& graph, const SolveOptions& input) {
     result.pb_sat_root_ordering_maximum_frontier = raw.stats.pb_sat_root_ordering_maximum_frontier;
     result.pb_sat_root_ordering_bandwidth = raw.stats.pb_sat_root_ordering_bandwidth;
     result.pb_sat_root_ordering_total_edge_span = raw.stats.pb_sat_root_ordering_total_edge_span;
+    result.sdp_attempted = raw.stats.sdp_attempted;
+    result.sdp_available = raw.stats.sdp_available;
+    result.sdp_raw_converged = raw.stats.sdp_raw_converged;
+    result.sdp_primal_residual = raw.stats.sdp_primal_residual;
+    result.sdp_certified_lower_bound = raw.stats.sdp_certified_lower_bound;
+    result.sdp_primal_objective = raw.stats.sdp_primal_objective;
+    result.sdp_dual_objective = raw.stats.sdp_dual_objective;
+    result.sdp_dual_residual = raw.stats.sdp_dual_residual;
+    result.sdp_solve_seconds = raw.stats.sdp_solve_seconds;
+    result.sdp_solver_iterations = raw.stats.sdp_solver_iterations;
+    result.sdp_solver_status = raw.stats.sdp_solver_status;
+    result.sdp_bisection_calls = raw.stats.sdp_bisection_calls;
+    result.sdp_triangle_cuts = raw.stats.sdp_triangle_cuts;
+    result.sdp_state_requests = raw.stats.sdp_state_requests;
+    result.sdp_state_certified = raw.stats.sdp_state_certified;
+    result.sdp_state_prunes = raw.stats.sdp_state_prunes;
+    result.sdp_state_cache_hits = raw.stats.sdp_state_cache_hits;
+    result.sdp_state_calls = raw.stats.sdp_state_calls;
+    result.sdp_state_busy = raw.stats.sdp_state_busy;
+    result.sdp_state_budget_rejections = raw.stats.sdp_state_budget_rejections;
+    result.sdp_state_uncertified = raw.stats.sdp_state_uncertified;
+    result.sdp_state_dimension_rejections = raw.stats.sdp_state_dimension_rejections;
+    result.sdp_state_preferred_max_dimension = raw.stats.sdp_state_preferred_max_dimension;
     if (input.verify) {
         if (!graph.validate_ordering(raw.ordering) ||
             graph.ordering_cutwidth(raw.ordering) != raw.upper_bound)
@@ -278,6 +328,29 @@ NB_MODULE(_boundedcuts, module) {
         .def_ro("pb_sat_root_ordering_maximum_frontier", &SolveResult::pb_sat_root_ordering_maximum_frontier)
         .def_ro("pb_sat_root_ordering_bandwidth", &SolveResult::pb_sat_root_ordering_bandwidth)
         .def_ro("pb_sat_root_ordering_total_edge_span", &SolveResult::pb_sat_root_ordering_total_edge_span)
+        .def_ro("sdp_attempted", &SolveResult::sdp_attempted)
+        .def_ro("sdp_available", &SolveResult::sdp_available)
+        .def_ro("sdp_raw_converged", &SolveResult::sdp_raw_converged)
+        .def_ro("sdp_primal_residual", &SolveResult::sdp_primal_residual)
+        .def_ro("sdp_certified_lower_bound", &SolveResult::sdp_certified_lower_bound)
+        .def_ro("sdp_primal_objective", &SolveResult::sdp_primal_objective)
+        .def_ro("sdp_dual_objective", &SolveResult::sdp_dual_objective)
+        .def_ro("sdp_dual_residual", &SolveResult::sdp_dual_residual)
+        .def_ro("sdp_solve_seconds", &SolveResult::sdp_solve_seconds)
+        .def_ro("sdp_solver_iterations", &SolveResult::sdp_solver_iterations)
+        .def_ro("sdp_solver_status", &SolveResult::sdp_solver_status)
+        .def_ro("sdp_bisection_calls", &SolveResult::sdp_bisection_calls)
+        .def_ro("sdp_triangle_cuts", &SolveResult::sdp_triangle_cuts)
+        .def_ro("sdp_state_requests", &SolveResult::sdp_state_requests)
+        .def_ro("sdp_state_certified", &SolveResult::sdp_state_certified)
+        .def_ro("sdp_state_prunes", &SolveResult::sdp_state_prunes)
+        .def_ro("sdp_state_cache_hits", &SolveResult::sdp_state_cache_hits)
+        .def_ro("sdp_state_calls", &SolveResult::sdp_state_calls)
+        .def_ro("sdp_state_busy", &SolveResult::sdp_state_busy)
+        .def_ro("sdp_state_budget_rejections", &SolveResult::sdp_state_budget_rejections)
+        .def_ro("sdp_state_uncertified", &SolveResult::sdp_state_uncertified)
+        .def_ro("sdp_state_dimension_rejections", &SolveResult::sdp_state_dimension_rejections)
+        .def_ro("sdp_state_preferred_max_dimension", &SolveResult::sdp_state_preferred_max_dimension)
         .def_ro("ordering", &SolveResult::ordering);
 
     module.def("solve", &solve, nb::arg("graph"), nb::arg("options"));

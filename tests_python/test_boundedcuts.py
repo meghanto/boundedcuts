@@ -342,3 +342,74 @@ def test_windows_dependency_check() -> None:
             assert runtime not in content, (
                 f"Forbidden non-MSVC runtime {runtime.decode()} found in {pe_file.name}"
             )
+
+
+def test_sdp_mapping_and_telemetry() -> None:
+    edges = np.array([[0, 1], [1, 2]], dtype=np.uint32)
+    graph = boundedcuts.from_edges(edges)
+    options = boundedcuts.SolveOptions()
+    options.controller = "adaptive"
+    options.adaptive_arms = ["dfs", "sdp"]
+
+    result = boundedcuts.solve(graph, options=options)
+
+    # Verify the telemetry properties are exposed
+    assert hasattr(result, "sdp_attempted")
+    assert hasattr(result, "sdp_available")
+    assert hasattr(result, "sdp_raw_converged")
+    assert hasattr(result, "sdp_primal_residual")
+    assert hasattr(result, "sdp_certified_lower_bound")
+    assert hasattr(result, "sdp_primal_objective")
+    assert hasattr(result, "sdp_dual_objective")
+    assert hasattr(result, "sdp_dual_residual")
+    assert hasattr(result, "sdp_solve_seconds")
+    assert hasattr(result, "sdp_solver_iterations")
+    assert hasattr(result, "sdp_solver_status")
+    assert hasattr(result, "sdp_bisection_calls")
+    assert hasattr(result, "sdp_triangle_cuts")
+    assert hasattr(result, "sdp_state_requests")
+    assert hasattr(result, "sdp_state_certified")
+    assert hasattr(result, "sdp_state_prunes")
+    assert hasattr(result, "sdp_state_cache_hits")
+    assert hasattr(result, "sdp_state_calls")
+    assert hasattr(result, "sdp_state_busy")
+    assert hasattr(result, "sdp_state_budget_rejections")
+    assert hasattr(result, "sdp_state_uncertified")
+    assert hasattr(result, "sdp_state_dimension_rejections")
+    assert hasattr(result, "sdp_state_preferred_max_dimension")
+
+    assert result.status in ("OPTIMAL", "FEASIBLE")
+
+
+def test_sdp_disabled_by_default() -> None:
+    edges = np.array([[0, 1]], dtype=np.uint32)
+    graph = boundedcuts.from_edges(edges)
+
+    # 1. Default solve (static controller, sdp is absent/not run as adaptive arm)
+    result_default = boundedcuts.solve(graph)
+    assert not result_default.sdp_attempted
+
+    # 2. Adaptive controller but sdp is absent from adaptive_arms
+    options_no_sdp = boundedcuts.SolveOptions()
+    options_no_sdp.controller = "adaptive"
+    options_no_sdp.adaptive_arms = ["dfs", "bounds"]
+    result_no_sdp = boundedcuts.solve(graph, options=options_no_sdp)
+    assert not result_no_sdp.sdp_attempted
+
+
+def test_sdp_capability_safe_fallback() -> None:
+    edges = np.array([[0, 1], [1, 2], [2, 0]], dtype=np.uint32)
+    graph = boundedcuts.from_edges(edges)
+    options = boundedcuts.SolveOptions()
+    options.controller = "adaptive"
+    options.adaptive_arms = ["dfs", "sdp"]
+
+    capabilities = boundedcuts.capabilities()
+    has_clarabel = capabilities.get("clarabel", False)
+
+    result = boundedcuts.solve(graph, options=options)
+
+    # If clarabel is not compiled in, the solver must fall back safely.
+    assert result.sdp_available == has_clarabel
+    if not has_clarabel:
+        assert result.sdp_certified_lower_bound is None
