@@ -2278,7 +2278,20 @@ OptimizerV2Result optimize_connected(const Graph& graph,
 
                     double score = 0.0;
                     if (is_pilot) {
-                        score = 1e15 - K;
+                        // An adaptive run starts with an incumbent and its
+                        // first useful exact question is whether that layout
+                        // can be improved by one.  Give every newly-created
+                        // threshold one bounded coarse fragment, but admit
+                        // those pilots from U-1 downward.  This is only a
+                        // startup ordering: after the pilot pass the
+                        // measured-cost score below and the starvation guard
+                        // continue to service every live proof forest.
+                        //
+                        // The previous `1e15 - K` expression did the
+                        // opposite: it made the lowest pilot win, biasing an
+                        // adaptive solve toward LB certification before it
+                        // had made a serious attempt to improve the layout.
+                        score = 1e15 + static_cast<double>(K);
                     } else {
                         score = expected_reduction / C_adj;
                     }

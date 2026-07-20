@@ -199,6 +199,11 @@ cutwidth::OptimizerV2Options native_options(const SolveOptions& input) {
 
     if (options.controller == cutwidth::ControllerMode::adaptive) {
         options.use_partial_bounds = contains(options.adaptive_arms, "bounds");
+        // The value-aware epoch probes U-1, U-2, ... before midpoint and
+        // then uses measured work plus starvation protection to schedule the
+        // persistent proof forests.  This makes the Python adaptive default
+        // useful to callers who value a better layout before a stronger LB.
+        options.threshold_scheduler = cutwidth::ThresholdSchedulerMode::value_aware;
         if (contains(options.adaptive_arms, "alns"))
             options.heuristic_search = cutwidth::HeuristicSearch::portfolio;
     }

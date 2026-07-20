@@ -341,6 +341,21 @@ void value_aware_scheduler_unit_tests() {
                 "value-aware initial cohort was not [15,14,13,12,9]");
     }
 
+    // The controller gives each unstarted candidate one pilot service.  The
+    // score must favor the incumbent-adjacent threshold, rather than the
+    // lowest K, so an adaptive run first tries to lower its layout width.
+    {
+        const auto candidates = cutwidth::value_aware_threshold_candidates(3, 16);
+        const auto selected = *std::max_element(
+            candidates.begin(), candidates.end(),
+            [](std::uint32_t lhs, std::uint32_t rhs) {
+                return (1e15 + static_cast<double>(lhs)) <
+                       (1e15 + static_cast<double>(rhs));
+            });
+        require(selected == 15,
+                "value-aware pilot did not start at incumbent minus one");
+    }
+
     // 1b. Candidate epochs filter lower-bound movement and rebase sparsely.
     {
         cutwidth::ValueAwareThresholdEpoch epoch;
