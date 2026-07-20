@@ -43,6 +43,7 @@ add_library(cutwidth_solver
     pb_cadical_incremental.cpp
     pb_encoding.cpp
     pb_solver.cpp
+    pb_structural_ordering.cpp
     residual_dp.cpp
     progressive_sdp_session.cpp
     progressive_cheap_bound_session.cpp

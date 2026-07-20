@@ -40,6 +40,7 @@ struct SolveOptions {
     std::optional<std::size_t> pb_sat_root_q;
     std::uint32_t pb_sat_root_max_gap = 2;
     std::string pb_sat_root_backend = "embedded";
+    std::string pb_sat_root_ordering = "auto";
 };
 
 struct SolveResult {
@@ -62,6 +63,10 @@ struct SolveResult {
     std::string pb_sat_root_provenance;
     std::size_t pb_sat_root_proof_bytes = 0;
     std::string pb_sat_root_proof_hash;
+    std::string pb_sat_root_ordering;
+    std::uint32_t pb_sat_root_ordering_maximum_frontier = 0;
+    std::uint32_t pb_sat_root_ordering_bandwidth = 0;
+    std::uint64_t pb_sat_root_ordering_total_edge_span = 0;
     nb::object ordering;
 };
 
@@ -89,6 +94,11 @@ void validate(const SolveOptions& options) {
             throw std::invalid_argument("pb-sat-root requires the adaptive controller");
         if (options.pb_sat_root_backend != "embedded" && options.pb_sat_root_backend != "external")
             throw std::invalid_argument("pb_sat_root_backend must be 'embedded' or 'external'");
+        if (options.pb_sat_root_ordering != "auto" &&
+            options.pb_sat_root_ordering != "identity" &&
+            options.pb_sat_root_ordering != "rcm")
+            throw std::invalid_argument(
+                "pb_sat_root_ordering must be 'auto', 'identity', or 'rcm'");
         if (options.pb_sat_root_backend == "external") {
             if (options.pb_sat_root_solver.empty() || options.pb_sat_root_checker.empty() ||
                 options.pb_sat_root_dir.empty() || options.pb_sat_root_timeout <= 0.0)
@@ -132,6 +142,7 @@ cutwidth::OptimizerV2Options native_options(const SolveOptions& input) {
     }
     options.pb_sat_root_q = input.pb_sat_root_q;
     options.pb_sat_root_max_gap = input.pb_sat_root_max_gap;
+    options.pb_sat_root_ordering = input.pb_sat_root_ordering;
     if (input.pb_sat_root_backend == "embedded") {
         options.pb_sat_root_backend = cutwidth::PbSatRootBackend::embedded;
     } else if (input.pb_sat_root_backend == "external") {
@@ -189,6 +200,10 @@ SolveResult solve(const cutwidth::Graph& graph, const SolveOptions& input) {
     result.pb_sat_root_provenance = raw.stats.pb_sat_root_provenance;
     result.pb_sat_root_proof_bytes = raw.stats.pb_sat_root_proof_bytes;
     result.pb_sat_root_proof_hash = raw.stats.pb_sat_root_proof_hash;
+    result.pb_sat_root_ordering = raw.stats.pb_sat_root_ordering;
+    result.pb_sat_root_ordering_maximum_frontier = raw.stats.pb_sat_root_ordering_maximum_frontier;
+    result.pb_sat_root_ordering_bandwidth = raw.stats.pb_sat_root_ordering_bandwidth;
+    result.pb_sat_root_ordering_total_edge_span = raw.stats.pb_sat_root_ordering_total_edge_span;
     if (input.verify) {
         if (!graph.validate_ordering(raw.ordering) ||
             graph.ordering_cutwidth(raw.ordering) != raw.upper_bound)
@@ -236,7 +251,8 @@ NB_MODULE(_boundedcuts, module) {
         .def_rw("pb_sat_root_timeout", &SolveOptions::pb_sat_root_timeout)
         .def_rw("pb_sat_root_q", &SolveOptions::pb_sat_root_q)
         .def_rw("pb_sat_root_max_gap", &SolveOptions::pb_sat_root_max_gap)
-        .def_rw("pb_sat_root_backend", &SolveOptions::pb_sat_root_backend);
+        .def_rw("pb_sat_root_backend", &SolveOptions::pb_sat_root_backend)
+        .def_rw("pb_sat_root_ordering", &SolveOptions::pb_sat_root_ordering);
 
     nb::class_<SolveResult>(module, "SolveResult")
         .def_ro("optimal", &SolveResult::optimal)
@@ -258,6 +274,10 @@ NB_MODULE(_boundedcuts, module) {
         .def_ro("pb_sat_root_provenance", &SolveResult::pb_sat_root_provenance)
         .def_ro("pb_sat_root_proof_bytes", &SolveResult::pb_sat_root_proof_bytes)
         .def_ro("pb_sat_root_proof_hash", &SolveResult::pb_sat_root_proof_hash)
+        .def_ro("pb_sat_root_ordering", &SolveResult::pb_sat_root_ordering)
+        .def_ro("pb_sat_root_ordering_maximum_frontier", &SolveResult::pb_sat_root_ordering_maximum_frontier)
+        .def_ro("pb_sat_root_ordering_bandwidth", &SolveResult::pb_sat_root_ordering_bandwidth)
+        .def_ro("pb_sat_root_ordering_total_edge_span", &SolveResult::pb_sat_root_ordering_total_edge_span)
         .def_ro("ordering", &SolveResult::ordering);
 
     module.def("solve", &solve, nb::arg("graph"), nb::arg("options"));

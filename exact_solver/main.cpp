@@ -49,6 +49,7 @@ struct CliOptions {
     std::string pb_sat_root_dir;
     cutwidth::PbSatRootBackend pb_sat_root_backend =
         cutwidth::PbSatRootBackend::embedded;
+    std::string pb_sat_root_ordering = "auto";
     std::chrono::milliseconds pb_sat_root_timeout{0};
     std::optional<std::size_t> pb_sat_root_q;
     std::uint32_t pb_sat_root_max_gap = 2;
@@ -167,6 +168,7 @@ Options:
       --pb-sat-root-checker FILE    Absolute path to DRAT proof checker
       --pb-sat-root-dir DIR         Artifact directory for pb-sat-root job
       --pb-sat-root-backend NAME    Select embedded or external (default embedded)
+      --pb-sat-root-ordering NAME   PB-only ordering: auto, identity, or rcm (default auto)
       --pb-sat-root-timeout SECONDS Timeout for pb-sat-root solver and checker runs
       --pb-sat-root-q N             Cardinality q for pb-sat-root (default: n/2)
       --pb-sat-root-max-gap N       Start root proof when U-L <= N (default: 2)
@@ -473,6 +475,13 @@ Options:
                     "pb-sat-root backend must be embedded or external");
         } else if (arg == "--pb-sat-root-timeout") {
             options.pb_sat_root_timeout = parse_seconds(value_after(arg));
+        } else if (arg == "--pb-sat-root-ordering") {
+            options.pb_sat_root_ordering = value_after(arg);
+            if (options.pb_sat_root_ordering != "auto" &&
+                options.pb_sat_root_ordering != "identity" &&
+                options.pb_sat_root_ordering != "rcm")
+                throw std::invalid_argument(
+                    "pb-sat-root ordering must be auto, identity, or rcm");
         } else if (arg == "--pb-sat-root-q") {
             options.pb_sat_root_q = parse_size(value_after(arg), "pb-sat-root q");
         } else if (arg == "--pb-sat-root-max-gap") {
@@ -1560,6 +1569,10 @@ int run(const CliOptions& cli) {
     std::string pb_sat_root_last_cnf_path, pb_sat_root_last_proof_path;
     std::string pb_sat_root_last_result, pb_sat_root_backend;
     std::string pb_sat_root_provenance, pb_sat_root_proof_hash;
+    std::string pb_sat_root_ordering;
+    std::uint32_t pb_sat_root_ordering_maximum_frontier = 0;
+    std::uint32_t pb_sat_root_ordering_bandwidth = 0;
+    std::uint64_t pb_sat_root_ordering_total_edge_span = 0;
     std::uint64_t pb_sat_root_proof_bytes = 0;
     cutwidth::MemoryGovernorStats memory_stats;
     std::uint64_t incumbent_service_calls = 0, incumbent_iterations = 0;
@@ -1630,6 +1643,7 @@ int run(const CliOptions& cli) {
         options.pb_sat_root_checker = cli.pb_sat_root_checker;
         options.pb_sat_root_dir = cli.pb_sat_root_dir;
         options.pb_sat_root_backend = cli.pb_sat_root_backend;
+        options.pb_sat_root_ordering = cli.pb_sat_root_ordering;
         options.pb_sat_root_timeout = cli.pb_sat_root_timeout;
         options.pb_sat_root_q = cli.pb_sat_root_q;
         options.pb_sat_root_max_gap = cli.pb_sat_root_max_gap;
@@ -1717,6 +1731,10 @@ int run(const CliOptions& cli) {
         pb_sat_root_provenance = v2.stats.pb_sat_root_provenance;
         pb_sat_root_proof_bytes = v2.stats.pb_sat_root_proof_bytes;
         pb_sat_root_proof_hash = v2.stats.pb_sat_root_proof_hash;
+        pb_sat_root_ordering = v2.stats.pb_sat_root_ordering;
+        pb_sat_root_ordering_maximum_frontier = v2.stats.pb_sat_root_ordering_maximum_frontier;
+        pb_sat_root_ordering_bandwidth = v2.stats.pb_sat_root_ordering_bandwidth;
+        pb_sat_root_ordering_total_edge_span = v2.stats.pb_sat_root_ordering_total_edge_span;
         memory_stats = v2.stats.memory;
         censored_decisions = v2.stats.censored_decisions;
         incumbent_service_calls = v2.stats.incumbent_service_calls;
@@ -1932,6 +1950,10 @@ int run(const CliOptions& cli) {
                   << ",\"pb_sat_root_provenance\":" << std::quoted(pb_sat_root_provenance)
                   << ",\"pb_sat_root_proof_bytes\":" << pb_sat_root_proof_bytes
                   << ",\"pb_sat_root_proof_hash\":" << std::quoted(pb_sat_root_proof_hash)
+                  << ",\"pb_sat_root_ordering\":" << std::quoted(pb_sat_root_ordering)
+                  << ",\"pb_sat_root_ordering_maximum_frontier\":" << pb_sat_root_ordering_maximum_frontier
+                  << ",\"pb_sat_root_ordering_bandwidth\":" << pb_sat_root_ordering_bandwidth
+                  << ",\"pb_sat_root_ordering_total_edge_span\":" << pb_sat_root_ordering_total_edge_span
                   << ",\"memory_budget_bytes\":" << memory_stats.budget_bytes
                   << ",\"memory_baseline_rss_bytes\":" << memory_stats.baseline_rss_bytes
                   << ",\"memory_sampled_rss_bytes\":" << memory_stats.sampled_rss_bytes

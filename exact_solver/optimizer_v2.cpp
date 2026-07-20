@@ -1,6 +1,7 @@
 #include "optimizer_v2.hpp"
 #include "pb_drat_trim_adapter.hpp"
 #include "pb_cadical_incremental.hpp"
+#include "pb_structural_ordering.hpp"
 #ifdef CUTWIDTH_HAVE_CADICAL
 #include <cadical.hpp>
 #endif
@@ -408,12 +409,15 @@ struct PbSatRootJobState {
     std::string provenance;
     std::size_t proof_bytes = 0;
     std::string proof_hash;
+    std::string ordering;
+    pb::StructuralOrderingScore ordering_score;
 };
 
 void run_pb_sat_root_job(
     const std::atomic<bool>& stop_requested,
     const Graph& graph,
     PbSatRootBackend backend,
+    std::string ordering_mode,
     std::string solver_path,
     std::string checker_path,
     std::string dir_path,
@@ -424,6 +428,10 @@ void run_pb_sat_root_job(
     std::shared_ptr<PbSatRootJobState> state)
 {
     try {
+        const auto structural = pb::select_structural_ordering(graph, ordering_mode);
+        const auto pb_graph = pb::permute_graph(graph, structural.permutation);
+        state->ordering = structural.name;
+        state->ordering_score = structural.score;
 #ifdef CUTWIDTH_HAVE_CADICAL
         if (backend == PbSatRootBackend::embedded) {
             state->backend = "embedded";
@@ -441,9 +449,9 @@ void run_pb_sat_root_job(
                 return;
             }
 
-            std::vector<Graph::Mask> empty_prefix(graph.word_count(), 0);
+            std::vector<Graph::Mask> empty_prefix(pb_graph.word_count(), 0);
             auto encoded = cutwidth::pb::encode_fixed_prefix_cut_profile(
-                graph, empty_prefix, q, K, cutwidth::pb::CardinalityEncoding::totalizer);
+                pb_graph, empty_prefix, q, K, cutwidth::pb::CardinalityEncoding::totalizer);
 
             std::vector<std::uint8_t> proof_bytes;
             const auto started = std::chrono::steady_clock::now();
@@ -585,9 +593,9 @@ void run_pb_sat_root_job(
             return;
         }
 
-        std::vector<Graph::Mask> empty_prefix(graph.word_count(), 0);
+        std::vector<Graph::Mask> empty_prefix(pb_graph.word_count(), 0);
         auto encoded = cutwidth::pb::encode_fixed_prefix_cut_profile(
-            graph, empty_prefix, q, K, cutwidth::pb::CardinalityEncoding::totalizer);
+            pb_graph, empty_prefix, q, K, cutwidth::pb::CardinalityEncoding::totalizer);
 
         std::ofstream output(state->cnf_path, std::ios::binary | std::ios::trunc);
         if (!output) {
@@ -1889,6 +1897,10 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 result.stats.pb_sat_root_provenance = active_pb_sat_root_job->provenance;
                 result.stats.pb_sat_root_proof_bytes = active_pb_sat_root_job->proof_bytes;
                 result.stats.pb_sat_root_proof_hash = active_pb_sat_root_job->proof_hash;
+                result.stats.pb_sat_root_ordering = active_pb_sat_root_job->ordering;
+                result.stats.pb_sat_root_ordering_maximum_frontier = active_pb_sat_root_job->ordering_score.maximum_frontier;
+                result.stats.pb_sat_root_ordering_bandwidth = active_pb_sat_root_job->ordering_score.bandwidth;
+                result.stats.pb_sat_root_ordering_total_edge_span = active_pb_sat_root_job->ordering_score.total_edge_span;
 
                 if (current_status == PbSatRootJobState::Status::certified_unsat) {
                     result.stats.pb_sat_root_certified_unsat++;
@@ -1939,6 +1951,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                     run_pb_sat_root_job,
                     std::ref(graph),
                     options.pb_sat_root_backend,
+                    options.pb_sat_root_ordering,
                     options.pb_sat_root_solver,
                     options.pb_sat_root_checker,
                     options.pb_sat_root_dir,
@@ -3626,6 +3639,10 @@ OptimizerV2Result optimize_connected(const Graph& graph,
         result.stats.pb_sat_root_provenance = active_pb_sat_root_job->provenance;
         result.stats.pb_sat_root_proof_bytes = active_pb_sat_root_job->proof_bytes;
         result.stats.pb_sat_root_proof_hash = active_pb_sat_root_job->proof_hash;
+        result.stats.pb_sat_root_ordering = active_pb_sat_root_job->ordering;
+        result.stats.pb_sat_root_ordering_maximum_frontier = active_pb_sat_root_job->ordering_score.maximum_frontier;
+        result.stats.pb_sat_root_ordering_bandwidth = active_pb_sat_root_job->ordering_score.bandwidth;
+        result.stats.pb_sat_root_ordering_total_edge_span = active_pb_sat_root_job->ordering_score.total_edge_span;
         result.stats.pb_sat_root_last_result = "CANCELLED";
         ++result.stats.pb_sat_root_failures;
     }
@@ -4284,6 +4301,10 @@ OptimizerV2Result optimize_cutwidth_v2(const Graph& graph, OptimizerV2Options op
             combined.stats.pb_sat_root_provenance = part.stats.pb_sat_root_provenance;
             combined.stats.pb_sat_root_proof_bytes = part.stats.pb_sat_root_proof_bytes;
             combined.stats.pb_sat_root_proof_hash = part.stats.pb_sat_root_proof_hash;
+            combined.stats.pb_sat_root_ordering = part.stats.pb_sat_root_ordering;
+            combined.stats.pb_sat_root_ordering_maximum_frontier = part.stats.pb_sat_root_ordering_maximum_frontier;
+            combined.stats.pb_sat_root_ordering_bandwidth = part.stats.pb_sat_root_ordering_bandwidth;
+            combined.stats.pb_sat_root_ordering_total_edge_span = part.stats.pb_sat_root_ordering_total_edge_span;
         }
         combined.stats.components_solved += part.optimal ? 1 : 0;
         for (const auto local : part.ordering)

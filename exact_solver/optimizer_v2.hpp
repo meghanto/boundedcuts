@@ -124,6 +124,7 @@ struct OptimizerV2Options {
     std::string pb_sat_root_checker;
     std::string pb_sat_root_dir;
     PbSatRootBackend pb_sat_root_backend = PbSatRootBackend::embedded;
+    std::string pb_sat_root_ordering = "auto";
     std::chrono::milliseconds pb_sat_root_timeout{0};
     std::optional<std::size_t> pb_sat_root_q;
     std::uint32_t pb_sat_root_max_gap = 2;
@@ -315,6 +316,10 @@ struct OptimizerV2Stats {
     std::string pb_sat_root_provenance;
     std::size_t pb_sat_root_proof_bytes = 0;
     std::string pb_sat_root_proof_hash;
+    std::string pb_sat_root_ordering;
+    std::uint32_t pb_sat_root_ordering_maximum_frontier = 0;
+    std::uint32_t pb_sat_root_ordering_bandwidth = 0;
+    std::uint64_t pb_sat_root_ordering_total_edge_span = 0;
 };
 
 struct OptimizerV2Result {

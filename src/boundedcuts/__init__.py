@@ -113,6 +113,7 @@ def solve(
     pb_sat_root_q: int | None = None,
     pb_sat_root_max_gap: int | None = None,
     pb_sat_root_backend: str | None = None,
+    pb_sat_root_ordering: str | None = None,
 ) -> SolveResult:
     """Solve ``graph`` while releasing the Python GIL during native search."""
     if not isinstance(graph, Graph):
@@ -123,7 +124,8 @@ def solve(
     elif any(value is not None for value in (
         threads, time_limit, controller, memory_budget_bytes, adaptive_arms, verify,
         pb_sat_root_solver, pb_sat_root_checker, pb_sat_root_dir, pb_sat_root_timeout,
-        pb_sat_root_q, pb_sat_root_max_gap, pb_sat_root_backend
+        pb_sat_root_q, pb_sat_root_max_gap, pb_sat_root_backend,
+        pb_sat_root_ordering
     )):
         raise TypeError("pass either options or individual solve keywords, not both")
     if threads is not None:
@@ -152,6 +154,8 @@ def solve(
         options.pb_sat_root_max_gap = int(pb_sat_root_max_gap)
     if pb_sat_root_backend is not None:
         options.pb_sat_root_backend = str(pb_sat_root_backend)
+    if pb_sat_root_ordering is not None:
+        options.pb_sat_root_ordering = str(pb_sat_root_ordering)
 
     temporary_proof_directory: tempfile.TemporaryDirectory[str] | None = None
     original_pb_values: tuple[str, str, str, float] | None = None

@@ -3,6 +3,7 @@
 #include "pb_cadical_incremental.hpp"
 #include "pb_drat_trim_adapter.hpp"
 #include "pb_backend.hpp"
+#include "pb_structural_ordering.hpp"
 #include "oracle.hpp"
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 #if defined(__unix__) || defined(__APPLE__)
 #include <sys/stat.h>
@@ -69,6 +71,67 @@ bool dpll(const CnfFormula& cnf, std::vector<std::int8_t>& values) {
         if (dpll(cnf, trial)) { values = std::move(trial); return true; }
     }
     return false;
+}
+
+bool cnf_satisfiable(const CnfFormula& cnf) {
+    std::vector<std::int8_t> assignment(cnf.variable_count + 1, -1);
+    return dpll(cnf, assignment);
+}
+
+void structural_ordering_tests() {
+    const Graph graph(8, {{0, 5}, {5, 2}, {2, 7}, {7, 1},
+                          {1, 6}, {6, 3}, {3, 4}, {0, 3}, {2, 6}});
+    const auto identity = identity_structural_ordering(graph);
+    const auto bfs = degree_bfs_structural_ordering(graph);
+    const auto rcm = rcm_structural_ordering(graph);
+    const auto automatic = select_structural_ordering(graph, "auto");
+
+    require(bfs.permutation == degree_bfs_structural_ordering(graph).permutation,
+            "degree BFS ordering is not deterministic");
+    require(rcm.permutation == rcm_structural_ordering(graph).permutation,
+            "RCM ordering is not deterministic");
+    auto key = [](const StructuralOrdering& ordering) {
+        return std::tuple{ordering.score.maximum_frontier,
+                          ordering.score.bandwidth,
+                          ordering.score.total_edge_span,
+                          ordering.permutation};
+    };
+    require(key(automatic) == std::min({key(identity), key(bfs), key(rcm)}),
+            "auto did not select the minimum structural score");
+    require(select_structural_ordering(graph, "identity").permutation ==
+                identity.permutation,
+            "identity ablation changed the graph order");
+    require(select_structural_ordering(graph, "rcm").permutation == rcm.permutation,
+            "RCM ablation did not select RCM");
+
+    for (const auto* candidate : {&identity, &bfs, &rcm}) {
+        const auto permuted = permute_graph(graph, candidate->permutation);
+        require(permuted.size() == graph.size() &&
+                    permuted.edge_count() == graph.edge_count(),
+                "permutation changed graph dimensions");
+        for (Graph::Vertex u = 0; u < graph.size(); ++u)
+            for (Graph::Vertex v = 0; v < graph.size(); ++v)
+                require(permuted.adjacent(u, v) ==
+                            graph.adjacent(candidate->permutation[u],
+                                           candidate->permutation[v]),
+                        "permuted graph is not isomorphic");
+
+        for (const std::size_t q : {std::size_t{2}, std::size_t{4}}) {
+            for (std::uint32_t threshold = 0; threshold <= 3; ++threshold) {
+                std::vector<Graph::Mask> original_prefix(graph.word_count(), 0);
+                std::vector<Graph::Mask> permuted_prefix(permuted.word_count(), 0);
+                const auto original_cnf = encode_fixed_prefix_cut_profile(
+                    graph, original_prefix, q, threshold,
+                    CardinalityEncoding::totalizer);
+                const auto permuted_cnf = encode_fixed_prefix_cut_profile(
+                    permuted, permuted_prefix, q, threshold,
+                    CardinalityEncoding::totalizer);
+                require(cnf_satisfiable(original_cnf.formula) ==
+                            cnf_satisfiable(permuted_cnf.formula),
+                        "PB root outcome changed under structural permutation");
+            }
+        }
+    }
 }
 
 std::uint32_t exact_cut_profile(
@@ -329,6 +392,7 @@ void incremental_cadical_tests() {
 int main() {
     try {
         exhaustive_cut_profile_encoding_tests();
+        structural_ordering_tests();
         exhaustive_encoding_tests();
         malformed_tests();
         external_adapter_tests();

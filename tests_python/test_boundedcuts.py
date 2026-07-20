@@ -152,6 +152,7 @@ def test_python_embedded_pb_sat_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
         captured["directory"] = native_options.pb_sat_root_dir
         captured["timeout"] = native_options.pb_sat_root_timeout
         assert native_options.pb_sat_root_backend == "embedded"
+        assert native_options.pb_sat_root_ordering == "auto"
         return sentinel
 
     monkeypatch.setattr(boundedcuts, "_native_solve", fake_solve)
@@ -311,6 +312,16 @@ def test_backend_validation() -> None:
     options.adaptive_arms = ["dfs", "pb-sat-root"]
     options.pb_sat_root_backend = "invalid_backend"
     options.pb_sat_root_timeout = 1.0
+    with pytest.raises(ValueError):
+        boundedcuts.solve(graph, options=options)
+
+
+def test_pb_root_ordering_validation() -> None:
+    graph = boundedcuts.from_edges([[0, 1]])
+    options = boundedcuts.SolveOptions()
+    options.controller = "adaptive"
+    options.adaptive_arms = ["dfs", "pb-sat-root"]
+    options.pb_sat_root_ordering = "not-an-ordering"
     with pytest.raises(ValueError):
         boundedcuts.solve(graph, options=options)
 
