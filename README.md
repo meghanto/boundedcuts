@@ -23,6 +23,8 @@ Linux systems:
 pip install boundedcuts
 ```
 
+The macOS wheels target macOS 11 or newer.
+
 Installing a compatible wheel only unpacks its native extension, bundled CLI,
 and proof tools; it does not compile locally. A source installation requires a
 C++20 toolchain and lets the build backend restore pinned Boost and Dispenso

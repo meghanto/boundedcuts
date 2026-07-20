@@ -88,6 +88,11 @@ def _native_build_environment():
                 "--build=missing",
                 "--settings",
                 "build_type=Release",
+                *(
+                    ["--settings", "os.version=" + environment["MACOSX_DEPLOYMENT_TARGET"]]
+                    if sys.platform == "darwin"
+                    else []
+                ),
                 "--options",
                 "boost/*:header_only=True",
                 "--output-folder",

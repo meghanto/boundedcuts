@@ -28,6 +28,7 @@
 #include <thread>
 #include <unordered_map>
 #include <stdexcept>
+#include <utility>
 
 #ifdef CUTWIDTH_ENABLE_SDP_PROTOTYPE
 #include "sdp_admm.hpp"
@@ -77,13 +78,46 @@ struct ProcessResult {
     int exit_code = -1;
 };
 
+class StoppableThread {
+public:
+    template <class Function, class... Args>
+    explicit StoppableThread(Function&& function, Args&&... args)
+        : thread_(
+              std::forward<Function>(function),
+              std::cref(stop_requested_),
+              std::forward<Args>(args)...)
+    {}
+
+    StoppableThread(const StoppableThread&) = delete;
+    StoppableThread& operator=(const StoppableThread&) = delete;
+    StoppableThread(StoppableThread&&) = delete;
+    StoppableThread& operator=(StoppableThread&&) = delete;
+
+    ~StoppableThread() {
+        request_stop();
+        join();
+    }
+
+    void request_stop() noexcept {
+        stop_requested_.store(true, std::memory_order_relaxed);
+    }
+
+    void join() {
+        if (thread_.joinable()) thread_.join();
+    }
+
+private:
+    std::atomic<bool> stop_requested_{false};
+    std::thread thread_;
+};
+
 #if defined(__unix__) || defined(__APPLE__)
 ProcessResult run_process_posix(
     const std::string& executable,
     const std::vector<std::string>& arguments,
     const std::filesystem::path& log_path,
     std::chrono::milliseconds timeout,
-    std::stop_token stop_token)
+    const std::atomic<bool>& stop_requested)
 {
     ProcessResult result;
     int log_fd = ::open(log_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -140,7 +174,8 @@ ProcessResult run_process_posix(
 
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start_time);
-        if (stop_token.stop_requested() || (timeout.count() > 0 && elapsed >= timeout)) {
+        if (stop_requested.load(std::memory_order_relaxed) ||
+            (timeout.count() > 0 && elapsed >= timeout)) {
             if (elapsed >= timeout) {
                 result.timed_out = true;
             }
@@ -200,7 +235,7 @@ ProcessResult run_process_windows(
     const std::vector<std::string>& arguments,
     const std::filesystem::path& log_path,
     std::chrono::milliseconds timeout,
-    std::stop_token stop_token)
+    const std::atomic<bool>& stop_requested)
 {
     ProcessResult result;
     const auto executable_wide = std::filesystem::path(executable).wstring();
@@ -275,7 +310,8 @@ ProcessResult run_process_windows(
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start_time);
 
-        if (stop_token.stop_requested() || (timeout.count() > 0 && elapsed >= timeout)) {
+        if (stop_requested.load(std::memory_order_relaxed) ||
+            (timeout.count() > 0 && elapsed >= timeout)) {
             if (elapsed >= timeout) {
                 result.timed_out = true;
             }
@@ -301,12 +337,12 @@ ProcessResult run_process_portable(
     const std::vector<std::string>& arguments,
     const std::filesystem::path& log_path,
     std::chrono::milliseconds timeout,
-    std::stop_token stop_token)
+    const std::atomic<bool>& stop_requested)
 {
 #ifdef _WIN32
-    return run_process_windows(executable, arguments, log_path, timeout, stop_token);
+    return run_process_windows(executable, arguments, log_path, timeout, stop_requested);
 #else
-    return run_process_posix(executable, arguments, log_path, timeout, stop_token);
+    return run_process_posix(executable, arguments, log_path, timeout, stop_requested);
 #endif
 }
 
@@ -324,7 +360,7 @@ struct PbSatRootJobState {
 };
 
 void run_pb_sat_root_job(
-    std::stop_token stop_token,
+    const std::atomic<bool>& stop_requested,
     const Graph& graph,
     std::string solver_path,
     std::string checker_path,
@@ -355,7 +391,7 @@ void run_pb_sat_root_job(
 
         std::filesystem::remove(state->proof_path, ec);
 
-        if (stop_token.stop_requested()) {
+        if (stop_requested.load(std::memory_order_relaxed)) {
             state->status.store(PbSatRootJobState::Status::failed, std::memory_order_release);
             return;
         }
@@ -376,7 +412,7 @@ void run_pb_sat_root_job(
             return;
         }
 
-        if (stop_token.stop_requested()) {
+        if (stop_requested.load(std::memory_order_relaxed)) {
             state->status.store(PbSatRootJobState::Status::failed, std::memory_order_release);
             return;
         }
@@ -387,12 +423,12 @@ void run_pb_sat_root_job(
             { "-q", state->cnf_path, state->proof_path },
             state->solver_log_path,
             timeout,
-            stop_token
+            stop_requested
         );
         auto solver_end = std::chrono::steady_clock::now();
         state->solver_seconds = std::chrono::duration<double>(solver_end - solver_start).count();
 
-        if (stop_token.stop_requested()) {
+        if (stop_requested.load(std::memory_order_relaxed)) {
             state->status.store(PbSatRootJobState::Status::failed, std::memory_order_release);
             return;
         }
@@ -440,12 +476,12 @@ void run_pb_sat_root_job(
             { state->cnf_path, state->proof_path },
             state->checker_log_path,
             timeout,
-            stop_token
+            stop_requested
         );
         auto checker_end = std::chrono::steady_clock::now();
         state->checker_seconds = std::chrono::duration<double>(checker_end - checker_start).count();
 
-        if (stop_token.stop_requested()) {
+        if (stop_requested.load(std::memory_order_relaxed)) {
             state->status.store(PbSatRootJobState::Status::failed, std::memory_order_release);
             return;
         }
@@ -1634,7 +1670,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
         }
     }
     std::shared_ptr<PbSatRootJobState> active_pb_sat_root_job;
-    std::unique_ptr<std::jthread> pb_sat_root_thread;
+    std::unique_ptr<StoppableThread> pb_sat_root_thread;
     std::set<std::uint32_t> pb_sat_root_attempted_thresholds;
 
     while (lower < upper) {
@@ -1650,6 +1686,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
 
                 // Join after observing the release-published terminal state so
                 // all non-atomic result fields are safe to consume.
+                pb_sat_root_thread->join();
                 pb_sat_root_thread.reset();
                 result.stats.pb_sat_root_solver_seconds += active_pb_sat_root_job->solver_seconds;
                 result.stats.pb_sat_root_checker_seconds += active_pb_sat_root_job->checker_seconds;
@@ -1698,7 +1735,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 ++result.stats.pb_sat_root_attempts;
                 result.stats.pb_sat_root_active_threshold = K;
                 result.stats.pb_sat_root_active_cardinality = q;
-                pb_sat_root_thread = std::make_unique<std::jthread>(
+                pb_sat_root_thread = std::make_unique<StoppableThread>(
                     run_pb_sat_root_job,
                     std::ref(graph),
                     options.pb_sat_root_solver,
@@ -2323,7 +2360,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 }
             }
             const auto service_started = Clock::now();
-            std::optional<std::jthread> concurrent_incumbent;
+            std::optional<StoppableThread> concurrent_incumbent;
             std::exception_ptr incumbent_exception;
             const auto incumbent_calls_before = incumbent_session
                 ? incumbent_session->stats().service_calls : 0U;
@@ -2333,7 +2370,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 ? incumbent_session->stats().service_seconds : 0.0;
             if (incumbent_session && options.threads > 1 && lower + 1 < upper) {
                 traced_incumbent_concurrent = true;
-                concurrent_incumbent.emplace([&](std::stop_token stop) {
+                concurrent_incumbent.emplace([&](const std::atomic<bool>& stop_requested) {
                     try {
                         // Admit one bounded incumbent lease before consulting
                         // the outer loop condition.  On a short, instrumented
@@ -2344,7 +2381,8 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                         // deadline, so a late lease is a cheap censored call,
                         // never extra wall-clock work.
                         (void)incumbent_session->service(1, absolute_deadline);
-                        while (!stop.stop_requested() && Clock::now() < absolute_deadline)
+                        while (!stop_requested.load(std::memory_order_relaxed) &&
+                               Clock::now() < absolute_deadline)
                             (void)incumbent_session->service(1, absolute_deadline);
                     } catch (...) { incumbent_exception = std::current_exception(); }
                 });
