@@ -1,5 +1,6 @@
 #include "pb_backend.hpp"
 #include "pb_cadical_incremental.hpp"
+#include "pb_drat_trim_adapter.hpp"
 
 #include <chrono>
 #include <exception>
@@ -119,9 +120,13 @@ DecisionResult decide_cutwidth(const Graph& graph, std::uint32_t threshold,
             return result;
         }
         if (native.status == IncrementalStatus::unsat_exploratory) {
-            result.provenance.proof_generated = !native.proof_path.empty();
-            std::error_code error;
-            if (result.provenance.proof_generated) {
+            bool has_memory_proof = !native.proof_bytes.empty();
+            result.provenance.proof_generated = has_memory_proof || !native.proof_path.empty();
+            if (has_memory_proof) {
+                result.provenance.proof_bytes = native.proof_bytes.size();
+                result.provenance.proof_hash = native.proof_hash;
+            } else if (!native.proof_path.empty()) {
+                std::error_code error;
                 result.provenance.proof_bytes =
                     std::filesystem::file_size(native.proof_path, error);
                 if (error) result.provenance.proof_bytes = 0;
@@ -134,19 +139,44 @@ DecisionResult decide_cutwidth(const Graph& graph, std::uint32_t threshold,
                 checker_options.time_limit = used >= checker_options.time_limit
                     ? std::chrono::milliseconds{1} : checker_options.time_limit - used;
             }
-            const auto checked = check_drat_proof_external(
-                encoded.formula, native.added_unit_clauses,
-                native.proof_path, checker_options);
-            result.provenance.checker_seconds = checked.runtime_seconds;
-            result.provenance.proof_checked = checked.checked;
-            if (checked.checked) {
-                result.provenance.external_status = ExternalSatStatus::unsat_verified;
-                result.provenance.branches_unsat_verified = 1;
-                result.decision.status = cutwidth::DecisionStatus::infeasible;
+            if (has_memory_proof) {
+                const auto check_started = Clock::now();
+                DratCheckerResult checked = verify_proof_in_memory(
+                    encoded.formula, native.added_unit_clauses,
+                    native.proof_bytes, checker_options.time_limit
+                );
+                result.provenance.checker_seconds = checked.runtime_seconds;
+                result.provenance.proof_checked = (checked.status == DratCheckerStatus::verified);
+                if (checked.status == DratCheckerStatus::verified) {
+                    result.provenance.external_status = ExternalSatStatus::unsat_verified;
+                    result.provenance.branches_unsat_verified = 1;
+                    result.decision.status = cutwidth::DecisionStatus::infeasible;
+                } else {
+                    result.provenance.external_status = ExternalSatStatus::unsat_unverified;
+                    result.provenance.branches_unsat_unverified = 1;
+                    if (checked.status == DratCheckerStatus::timeout) {
+                        result.provenance.diagnostic = "in-memory checker timed out";
+                    } else if (checked.status == DratCheckerStatus::error) {
+                        result.provenance.diagnostic = "in-memory checker error";
+                    } else {
+                        result.provenance.diagnostic = "in-memory checker not verified";
+                    }
+                }
             } else {
-                result.provenance.external_status = ExternalSatStatus::unsat_unverified;
-                result.provenance.branches_unsat_unverified = 1;
-                result.provenance.diagnostic = checked.diagnostic;
+                const auto checked = check_drat_proof_external(
+                    encoded.formula, native.added_unit_clauses,
+                    native.proof_path, checker_options);
+                result.provenance.checker_seconds = checked.runtime_seconds;
+                result.provenance.proof_checked = checked.checked;
+                if (checked.checked) {
+                    result.provenance.external_status = ExternalSatStatus::unsat_verified;
+                    result.provenance.branches_unsat_verified = 1;
+                    result.decision.status = cutwidth::DecisionStatus::infeasible;
+                } else {
+                    result.provenance.external_status = ExternalSatStatus::unsat_unverified;
+                    result.provenance.branches_unsat_unverified = 1;
+                    result.provenance.diagnostic = checked.diagnostic;
+                }
             }
             return result;
         }

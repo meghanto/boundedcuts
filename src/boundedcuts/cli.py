@@ -28,23 +28,30 @@ def main() -> int:
         if index + 1 < len(arguments):
             arms = arguments[index + 1]
     if "pb-sat-root" in {arm.strip() for arm in arms.split(",")}:
-        bundled = proof_tools()
-        defaults = {
-            "--pb-sat-root-solver": bundled["cadical"],
-            "--pb-sat-root-checker": bundled["drat_trim"],
-            "--pb-sat-root-timeout": "90",
-        }
-        for flag, value in defaults.items():
-            if flag not in arguments:
-                arguments.extend((flag, value))
-        if "--pb-sat-root-dir" not in arguments:
-            temporary_proof_directory = tempfile.TemporaryDirectory(
-                prefix="boundedcuts-pb-sat-"
-            )
-            arguments.extend((
-                "--pb-sat-root-dir",
-                temporary_proof_directory.name,
-            ))
+        backend = "embedded"
+        if "--pb-sat-root-backend" in arguments:
+            index = arguments.index("--pb-sat-root-backend")
+            if index + 1 < len(arguments):
+                backend = arguments[index + 1]
+        if "--pb-sat-root-timeout" not in arguments:
+            arguments.extend(("--pb-sat-root-timeout", "90"))
+        if backend == "external":
+            missing_solver = "--pb-sat-root-solver" not in arguments
+            missing_checker = "--pb-sat-root-checker" not in arguments
+            if missing_solver or missing_checker:
+                bundled = proof_tools()
+                if missing_solver:
+                    arguments.extend(("--pb-sat-root-solver", bundled["cadical"]))
+                if missing_checker:
+                    arguments.extend(("--pb-sat-root-checker", bundled["drat_trim"]))
+            if "--pb-sat-root-dir" not in arguments:
+                temporary_proof_directory = tempfile.TemporaryDirectory(
+                    prefix="boundedcuts-pb-sat-"
+                )
+                arguments.extend((
+                    "--pb-sat-root-dir",
+                    temporary_proof_directory.name,
+                ))
     command = [str(executable()), *arguments]
     if os.name != "nt" and temporary_proof_directory is None:
         os.execv(command[0], command)

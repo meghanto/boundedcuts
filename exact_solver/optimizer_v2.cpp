@@ -1,4 +1,9 @@
 #include "optimizer_v2.hpp"
+#include "pb_drat_trim_adapter.hpp"
+#include "pb_cadical_incremental.hpp"
+#ifdef CUTWIDTH_HAVE_CADICAL
+#include <cadical.hpp>
+#endif
 
 #include "decomposition.hpp"
 #include "decision_session.hpp"
@@ -19,6 +24,7 @@
 #include <filesystem>
 #include <functional>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -57,6 +63,47 @@ extern char** environ;
 
 namespace cutwidth {
 namespace {
+
+
+
+std::string fnv1a64_bytes(const std::vector<std::uint8_t>& bytes) {
+    std::uint64_t hash = 0xcbf29ce484222325ULL;
+    for (std::uint8_t byte : bytes) {
+        hash ^= byte;
+        hash *= 0x00000100000001B3ULL;
+    }
+    std::ostringstream out;
+    out << "fnv1a64:" << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return out.str();
+}
+
+std::string fnv1a64_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return "";
+    std::uint64_t hash = 0xcbf29ce484222325ULL;
+    char byte;
+    while (in.get(byte)) {
+        hash ^= static_cast<std::uint8_t>(byte);
+        hash *= 0x00000100000001B3ULL;
+    }
+    std::ostringstream out;
+    out << "fnv1a64:" << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return out.str();
+}
+
+#ifdef CUTWIDTH_HAVE_CADICAL
+struct PbSatDeadlineTerminator final : CaDiCaL::Terminator {
+    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max();
+    const std::atomic<bool>* stop = nullptr;
+    const pb::InMemoryDratTracer* tracer = nullptr;
+    bool terminate() override {
+        return (stop && stop->load(std::memory_order_relaxed)) ||
+            (tracer && tracer->overflowed()) ||
+            std::chrono::steady_clock::now() >= deadline;
+    }
+};
+#endif
+
 
 enum class ParsedStatus { unknown, sat, unsat };
 
@@ -357,20 +404,162 @@ struct PbSatRootJobState {
     std::string checker_log_path;
     double solver_seconds = 0.0;
     double checker_seconds = 0.0;
+    std::string backend;
+    std::string provenance;
+    std::size_t proof_bytes = 0;
+    std::string proof_hash;
 };
 
 void run_pb_sat_root_job(
     const std::atomic<bool>& stop_requested,
     const Graph& graph,
+    PbSatRootBackend backend,
     std::string solver_path,
     std::string checker_path,
     std::string dir_path,
     std::chrono::milliseconds timeout,
+    std::size_t max_proof_bytes,
     std::size_t q,
     std::uint32_t K,
     std::shared_ptr<PbSatRootJobState> state)
 {
     try {
+#ifdef CUTWIDTH_HAVE_CADICAL
+        if (backend == PbSatRootBackend::embedded) {
+            state->backend = "embedded";
+            state->provenance = "in-memory-bytes";
+            state->status.store(PbSatRootJobState::Status::solving, std::memory_order_release);
+            state->threshold = K;
+            state->cardinality = q;
+            state->cnf_path = "";
+            state->proof_path = "";
+            state->solver_log_path = "";
+            state->checker_log_path = "";
+
+            if (stop_requested.load(std::memory_order_relaxed)) {
+                state->status.store(PbSatRootJobState::Status::failed, std::memory_order_release);
+                return;
+            }
+
+            std::vector<Graph::Mask> empty_prefix(graph.word_count(), 0);
+            auto encoded = cutwidth::pb::encode_fixed_prefix_cut_profile(
+                graph, empty_prefix, q, K, cutwidth::pb::CardinalityEncoding::totalizer);
+
+            std::vector<std::uint8_t> proof_bytes;
+            const auto started = std::chrono::steady_clock::now();
+            const auto deadline = timeout.count() == 0
+                ? std::chrono::steady_clock::time_point::max() : started + timeout;
+            int status = 0;
+            bool proof_overflow = false;
+            {
+                // Keep the tracer alive longer than the solver on all return
+                // paths, then release the solver before the checker doubles
+                // the proof database in memory.
+                pb::InMemoryDratTracer tracer(proof_bytes, true, max_proof_bytes);
+                PbSatDeadlineTerminator terminator;
+                CaDiCaL::Solver solver;
+                solver.set("quiet", 1);
+                terminator.deadline = deadline;
+                terminator.stop = &stop_requested;
+                terminator.tracer = &tracer;
+                solver.connect_terminator(&terminator);
+                solver.connect_proof_tracer(&tracer, false);
+
+                for (const auto& clause : encoded.formula.clauses) {
+                    for (const auto literal : clause) solver.add(literal);
+                    solver.add(0);
+                }
+
+                if (stop_requested.load(std::memory_order_relaxed)) {
+                    solver.disconnect_terminator();
+                    solver.disconnect_proof_tracer(&tracer);
+                    state->status.store(PbSatRootJobState::Status::failed,
+                                        std::memory_order_release);
+                    return;
+                }
+
+                status = solver.solve();
+                solver.disconnect_terminator();
+                if (status == 20) solver.conclude();
+                proof_overflow = tracer.overflowed();
+                solver.disconnect_proof_tracer(&tracer);
+            }
+            state->solver_seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - started).count();
+
+            if (proof_overflow) {
+                state->provenance = "in-memory-proof-cap-exceeded";
+                state->status.store(PbSatRootJobState::Status::failed,
+                                    std::memory_order_release);
+                return;
+            }
+
+            if (stop_requested.load(std::memory_order_relaxed)) {
+                state->status.store(PbSatRootJobState::Status::failed, std::memory_order_release);
+                return;
+            }
+
+            if (status == 10) { // SAT
+                state->status.store(PbSatRootJobState::Status::sat, std::memory_order_release);
+                return;
+            } else if (status == 20) { // UNSAT
+                state->proof_bytes = proof_bytes.size();
+                state->proof_hash = fnv1a64_bytes(proof_bytes);
+
+                if (timeout.count() != 0 && std::chrono::steady_clock::now() >= deadline) {
+                    state->status.store(PbSatRootJobState::Status::timed_out,
+                                        std::memory_order_release);
+                    return;
+                }
+                const auto checker_budget = timeout.count() == 0
+                    ? std::chrono::milliseconds{0}
+                    : std::max(std::chrono::milliseconds{1},
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            deadline - std::chrono::steady_clock::now()));
+
+                state->status.store(PbSatRootJobState::Status::checking, std::memory_order_release);
+                const auto check_started = std::chrono::steady_clock::now();
+                pb::DratCheckerResult checker_res = pb::verify_proof_in_memory(
+                    encoded.formula,
+                    {}, // empty added unit clauses
+                    proof_bytes,
+                    checker_budget,
+                    &stop_requested
+                );
+                state->checker_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - check_started).count();
+
+                if (stop_requested.load(std::memory_order_relaxed)) {
+                    state->status.store(PbSatRootJobState::Status::failed, std::memory_order_release);
+                    return;
+                }
+
+                if (checker_res.status == pb::DratCheckerStatus::verified) {
+                    state->status.store(PbSatRootJobState::Status::certified_unsat, std::memory_order_release);
+                } else if (checker_res.status == pb::DratCheckerStatus::timeout) {
+                    state->status.store(PbSatRootJobState::Status::timed_out, std::memory_order_release);
+                } else {
+                    state->status.store(PbSatRootJobState::Status::failed, std::memory_order_release);
+                }
+                return;
+            } else { // Timeout or other
+                state->status.store(PbSatRootJobState::Status::timed_out, std::memory_order_release);
+                return;
+            }
+        }
+#else
+        if (backend == PbSatRootBackend::embedded) {
+            state->backend = "embedded";
+            state->provenance = "unavailable";
+            state->threshold = K;
+            state->cardinality = q;
+            state->status.store(PbSatRootJobState::Status::failed,
+                                std::memory_order_release);
+            return;
+        }
+#endif
+
+        state->backend = "external";
+        state->provenance = "subprocess-files";
         state->status.store(PbSatRootJobState::Status::solving, std::memory_order_release);
         state->threshold = K;
         state->cardinality = q;
@@ -468,6 +657,8 @@ void run_pb_sat_root_job(
             state->status.store(PbSatRootJobState::Status::failed, std::memory_order_release);
             return;
         }
+        state->proof_bytes = proof_size;
+        state->proof_hash = fnv1a64_file(state->proof_path);
 
         state->status.store(PbSatRootJobState::Status::checking, std::memory_order_release);
         auto checker_start = std::chrono::steady_clock::now();
@@ -1694,6 +1885,10 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 result.stats.pb_sat_root_active_cardinality = active_pb_sat_root_job->cardinality;
                 result.stats.pb_sat_root_last_cnf_path = active_pb_sat_root_job->cnf_path;
                 result.stats.pb_sat_root_last_proof_path = active_pb_sat_root_job->proof_path;
+                result.stats.pb_sat_root_backend = active_pb_sat_root_job->backend;
+                result.stats.pb_sat_root_provenance = active_pb_sat_root_job->provenance;
+                result.stats.pb_sat_root_proof_bytes = active_pb_sat_root_job->proof_bytes;
+                result.stats.pb_sat_root_proof_hash = active_pb_sat_root_job->proof_hash;
 
                 if (current_status == PbSatRootJobState::Status::certified_unsat) {
                     result.stats.pb_sat_root_certified_unsat++;
@@ -1735,13 +1930,20 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 ++result.stats.pb_sat_root_attempts;
                 result.stats.pb_sat_root_active_threshold = K;
                 result.stats.pb_sat_root_active_cardinality = q;
+                constexpr std::size_t maximum_memory_proof = std::size_t{1} << 30U;
+                const auto proof_memory_cap = options.memory_budget_bytes == 0
+                    ? maximum_memory_proof
+                    : std::max<std::size_t>(1, std::min(
+                        maximum_memory_proof, options.memory_budget_bytes / 4U));
                 pb_sat_root_thread = std::make_unique<StoppableThread>(
                     run_pb_sat_root_job,
                     std::ref(graph),
+                    options.pb_sat_root_backend,
                     options.pb_sat_root_solver,
                     options.pb_sat_root_checker,
                     options.pb_sat_root_dir,
                     options.pb_sat_root_timeout,
+                    proof_memory_cap,
                     q,
                     K,
                     active_pb_sat_root_job
@@ -3126,14 +3328,13 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                     } else if (exploratory.status ==
                                pb::IncrementalStatus::unsat_exploratory) {
                         ++result.stats.pb_incremental_unsat_exploratory;
-                        auto check_options = pb_options.external;
-                        check_options.time_limit = remaining_time(
+                        const auto check_limit = remaining_time(
                             global_start, options.time_limit);
-                        const auto checked = pb::check_drat_proof_external(
+                        const auto checked = pb::verify_proof_in_memory(
                             incremental_encoding->formula,
                             exploratory.added_unit_clauses,
-                            exploratory.proof_path, check_options);
-                        if (checked.checked) {
+                            exploratory.proof_bytes, check_limit);
+                        if (checked.status == pb::DratCheckerStatus::verified) {
                             decision.status = DecisionStatus::infeasible;
                             decision.threshold = threshold;
                             incremental_sat = true; // The decision is final;
@@ -3155,17 +3356,9 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                             result.stats.pb_last.proof_checked = true;
                             result.stats.pb_last.checker_seconds =
                                 checked.runtime_seconds;
-                            std::error_code proof_error;
                             result.stats.pb_last.proof_bytes =
-                                std::filesystem::file_size(
-                                    exploratory.proof_path, proof_error);
-                            if (proof_error) result.stats.pb_last.proof_bytes = 0;
-                            else result.stats.pb_last.proof_hash =
-                                pb::file_fnv1a64(exploratory.proof_path);
-                            if (pb_options.external.keep_temporary_files)
-                                result.stats.pb_last.artifact_directory =
-                                    std::filesystem::path(exploratory.proof_path)
-                                        .parent_path().string();
+                                exploratory.proof_bytes.size();
+                            result.stats.pb_last.proof_hash = exploratory.proof_hash;
                             result.stats.pb_last.branches_completed = 1;
                             result.stats.pb_last.branches_unsat_verified = 1;
                         }
@@ -3429,6 +3622,10 @@ OptimizerV2Result optimize_connected(const Graph& graph,
         result.stats.pb_sat_root_active_cardinality = active_pb_sat_root_job->cardinality;
         result.stats.pb_sat_root_last_cnf_path = active_pb_sat_root_job->cnf_path;
         result.stats.pb_sat_root_last_proof_path = active_pb_sat_root_job->proof_path;
+        result.stats.pb_sat_root_backend = active_pb_sat_root_job->backend;
+        result.stats.pb_sat_root_provenance = active_pb_sat_root_job->provenance;
+        result.stats.pb_sat_root_proof_bytes = active_pb_sat_root_job->proof_bytes;
+        result.stats.pb_sat_root_proof_hash = active_pb_sat_root_job->proof_hash;
         result.stats.pb_sat_root_last_result = "CANCELLED";
         ++result.stats.pb_sat_root_failures;
     }
@@ -4077,12 +4274,16 @@ OptimizerV2Result optimize_cutwidth_v2(const Graph& graph, OptimizerV2Options op
         combined.stats.pb_sat_root_checker_successes += part.stats.pb_sat_root_checker_successes;
         combined.stats.pb_sat_root_solver_seconds += part.stats.pb_sat_root_solver_seconds;
         combined.stats.pb_sat_root_checker_seconds += part.stats.pb_sat_root_checker_seconds;
-        if (!part.stats.pb_sat_root_last_cnf_path.empty()) {
+        if (part.stats.pb_sat_root_attempts != 0) {
             combined.stats.pb_sat_root_active_threshold = part.stats.pb_sat_root_active_threshold;
             combined.stats.pb_sat_root_active_cardinality = part.stats.pb_sat_root_active_cardinality;
             combined.stats.pb_sat_root_last_cnf_path = part.stats.pb_sat_root_last_cnf_path;
             combined.stats.pb_sat_root_last_proof_path = part.stats.pb_sat_root_last_proof_path;
             combined.stats.pb_sat_root_last_result = part.stats.pb_sat_root_last_result;
+            combined.stats.pb_sat_root_backend = part.stats.pb_sat_root_backend;
+            combined.stats.pb_sat_root_provenance = part.stats.pb_sat_root_provenance;
+            combined.stats.pb_sat_root_proof_bytes = part.stats.pb_sat_root_proof_bytes;
+            combined.stats.pb_sat_root_proof_hash = part.stats.pb_sat_root_proof_hash;
         }
         combined.stats.components_solved += part.optimal ? 1 : 0;
         for (const auto local : part.ordering)

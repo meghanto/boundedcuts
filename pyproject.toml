@@ -43,10 +43,11 @@ minimum-version = "1.0"
 cmake.version = ">=3.20"
 cmake.build-type = "Release"
 wheel.packages = ["src/boundedcuts"]
-wheel.license-files = ["LICENSE"]
+wheel.license-files = ["LICENSE", "LICENSES/DRAT-trim.txt"]
 sdist.include = [
     "CMakeLists.txt",
     "LICENSE",
+    "LICENSES/**",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "exact_solver/**",

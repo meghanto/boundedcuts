@@ -112,6 +112,7 @@ def solve(
     pb_sat_root_timeout: float | None = None,
     pb_sat_root_q: int | None = None,
     pb_sat_root_max_gap: int | None = None,
+    pb_sat_root_backend: str | None = None,
 ) -> SolveResult:
     """Solve ``graph`` while releasing the Python GIL during native search."""
     if not isinstance(graph, Graph):
@@ -122,7 +123,7 @@ def solve(
     elif any(value is not None for value in (
         threads, time_limit, controller, memory_budget_bytes, adaptive_arms, verify,
         pb_sat_root_solver, pb_sat_root_checker, pb_sat_root_dir, pb_sat_root_timeout,
-        pb_sat_root_q, pb_sat_root_max_gap
+        pb_sat_root_q, pb_sat_root_max_gap, pb_sat_root_backend
     )):
         raise TypeError("pass either options or individual solve keywords, not both")
     if threads is not None:
@@ -149,6 +150,8 @@ def solve(
         options.pb_sat_root_q = int(pb_sat_root_q)
     if pb_sat_root_max_gap is not None:
         options.pb_sat_root_max_gap = int(pb_sat_root_max_gap)
+    if pb_sat_root_backend is not None:
+        options.pb_sat_root_backend = str(pb_sat_root_backend)
 
     temporary_proof_directory: tempfile.TemporaryDirectory[str] | None = None
     original_pb_values: tuple[str, str, str, float] | None = None
@@ -159,18 +162,23 @@ def solve(
             options.pb_sat_root_dir,
             options.pb_sat_root_timeout,
         )
-        bundled = proof_tools()
-        if not options.pb_sat_root_solver:
-            options.pb_sat_root_solver = bundled["cadical"]
-        if not options.pb_sat_root_checker:
-            options.pb_sat_root_checker = bundled["drat_trim"]
-        if not options.pb_sat_root_dir:
-            temporary_proof_directory = tempfile.TemporaryDirectory(
-                prefix="boundedcuts-pb-sat-"
-            )
-            options.pb_sat_root_dir = temporary_proof_directory.name
-        if options.pb_sat_root_timeout <= 0.0:
-            options.pb_sat_root_timeout = 90.0
+        if options.pb_sat_root_backend == "external":
+            if not options.pb_sat_root_solver or not options.pb_sat_root_checker:
+                bundled = proof_tools()
+                if not options.pb_sat_root_solver:
+                    options.pb_sat_root_solver = bundled["cadical"]
+                if not options.pb_sat_root_checker:
+                    options.pb_sat_root_checker = bundled["drat_trim"]
+            if not options.pb_sat_root_dir:
+                temporary_proof_directory = tempfile.TemporaryDirectory(
+                    prefix="boundedcuts-pb-sat-"
+                )
+                options.pb_sat_root_dir = temporary_proof_directory.name
+            if options.pb_sat_root_timeout <= 0.0:
+                options.pb_sat_root_timeout = 90.0
+        else:
+            if options.pb_sat_root_timeout <= 0.0:
+                options.pb_sat_root_timeout = 90.0
 
     try:
         return _native_solve(graph, options)

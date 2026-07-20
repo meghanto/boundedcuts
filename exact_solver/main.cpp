@@ -47,6 +47,8 @@ struct CliOptions {
     std::string pb_sat_root_solver;
     std::string pb_sat_root_checker;
     std::string pb_sat_root_dir;
+    cutwidth::PbSatRootBackend pb_sat_root_backend =
+        cutwidth::PbSatRootBackend::embedded;
     std::chrono::milliseconds pb_sat_root_timeout{0};
     std::optional<std::size_t> pb_sat_root_q;
     std::uint32_t pb_sat_root_max_gap = 2;
@@ -164,6 +166,7 @@ Options:
       --pb-sat-root-solver FILE     Absolute path to proof-producing SAT solver
       --pb-sat-root-checker FILE    Absolute path to DRAT proof checker
       --pb-sat-root-dir DIR         Artifact directory for pb-sat-root job
+      --pb-sat-root-backend NAME    Select embedded or external (default embedded)
       --pb-sat-root-timeout SECONDS Timeout for pb-sat-root solver and checker runs
       --pb-sat-root-q N             Cardinality q for pb-sat-root (default: n/2)
       --pb-sat-root-max-gap N       Start root proof when U-L <= N (default: 2)
@@ -459,6 +462,15 @@ Options:
             options.pb_sat_root_checker = value_after(arg);
         } else if (arg == "--pb-sat-root-dir") {
             options.pb_sat_root_dir = value_after(arg);
+        } else if (arg == "--pb-sat-root-backend") {
+            const auto value = value_after(arg);
+            if (value == "embedded")
+                options.pb_sat_root_backend = cutwidth::PbSatRootBackend::embedded;
+            else if (value == "external")
+                options.pb_sat_root_backend = cutwidth::PbSatRootBackend::external;
+            else
+                throw std::invalid_argument(
+                    "pb-sat-root backend must be embedded or external");
         } else if (arg == "--pb-sat-root-timeout") {
             options.pb_sat_root_timeout = parse_seconds(value_after(arg));
         } else if (arg == "--pb-sat-root-q") {
@@ -1546,7 +1558,9 @@ int run(const CliOptions& cli) {
     std::uint64_t pb_sat_root_active_cardinality = 0;
     double pb_sat_root_solver_seconds = 0.0, pb_sat_root_checker_seconds = 0.0;
     std::string pb_sat_root_last_cnf_path, pb_sat_root_last_proof_path;
-    std::string pb_sat_root_last_result;
+    std::string pb_sat_root_last_result, pb_sat_root_backend;
+    std::string pb_sat_root_provenance, pb_sat_root_proof_hash;
+    std::uint64_t pb_sat_root_proof_bytes = 0;
     cutwidth::MemoryGovernorStats memory_stats;
     std::uint64_t incumbent_service_calls = 0, incumbent_iterations = 0;
     std::uint64_t incumbent_candidate_evaluations = 0;
@@ -1615,6 +1629,7 @@ int run(const CliOptions& cli) {
         options.pb_sat_root_solver = cli.pb_sat_root_solver;
         options.pb_sat_root_checker = cli.pb_sat_root_checker;
         options.pb_sat_root_dir = cli.pb_sat_root_dir;
+        options.pb_sat_root_backend = cli.pb_sat_root_backend;
         options.pb_sat_root_timeout = cli.pb_sat_root_timeout;
         options.pb_sat_root_q = cli.pb_sat_root_q;
         options.pb_sat_root_max_gap = cli.pb_sat_root_max_gap;
@@ -1625,12 +1640,14 @@ int run(const CliOptions& cli) {
                     cli.adaptive_arms.end();
             };
             if (arm("pb-sat-root")) {
-                if (cli.pb_sat_root_solver.empty())
-                    throw std::invalid_argument("pb-sat-root solver path must be specified when the arm is enabled");
-                if (cli.pb_sat_root_checker.empty())
-                    throw std::invalid_argument("pb-sat-root checker path must be specified when the arm is enabled");
-                if (cli.pb_sat_root_dir.empty())
-                    throw std::invalid_argument("pb-sat-root artifact directory must be specified when the arm is enabled");
+                if (cli.pb_sat_root_backend == cutwidth::PbSatRootBackend::external) {
+                    if (cli.pb_sat_root_solver.empty())
+                        throw std::invalid_argument("external pb-sat-root solver path must be specified");
+                    if (cli.pb_sat_root_checker.empty())
+                        throw std::invalid_argument("external pb-sat-root checker path must be specified");
+                    if (cli.pb_sat_root_dir.empty())
+                        throw std::invalid_argument("external pb-sat-root artifact directory must be specified");
+                }
                 if (cli.pb_sat_root_timeout.count() <= 0)
                     throw std::invalid_argument("pb-sat-root timeout must be positive when the arm is enabled");
                 if (cli.pb_sat_root_q && *cli.pb_sat_root_q > graph.size())
@@ -1696,6 +1713,10 @@ int run(const CliOptions& cli) {
         pb_sat_root_last_cnf_path = v2.stats.pb_sat_root_last_cnf_path;
         pb_sat_root_last_proof_path = v2.stats.pb_sat_root_last_proof_path;
         pb_sat_root_last_result = v2.stats.pb_sat_root_last_result;
+        pb_sat_root_backend = v2.stats.pb_sat_root_backend;
+        pb_sat_root_provenance = v2.stats.pb_sat_root_provenance;
+        pb_sat_root_proof_bytes = v2.stats.pb_sat_root_proof_bytes;
+        pb_sat_root_proof_hash = v2.stats.pb_sat_root_proof_hash;
         memory_stats = v2.stats.memory;
         censored_decisions = v2.stats.censored_decisions;
         incumbent_service_calls = v2.stats.incumbent_service_calls;
@@ -1907,6 +1928,10 @@ int run(const CliOptions& cli) {
                   << ",\"pb_sat_root_last_cnf_path\":" << std::quoted(pb_sat_root_last_cnf_path)
                   << ",\"pb_sat_root_last_proof_path\":" << std::quoted(pb_sat_root_last_proof_path)
                   << ",\"pb_sat_root_last_result\":" << std::quoted(pb_sat_root_last_result)
+                  << ",\"pb_sat_root_backend\":" << std::quoted(pb_sat_root_backend)
+                  << ",\"pb_sat_root_provenance\":" << std::quoted(pb_sat_root_provenance)
+                  << ",\"pb_sat_root_proof_bytes\":" << pb_sat_root_proof_bytes
+                  << ",\"pb_sat_root_proof_hash\":" << std::quoted(pb_sat_root_proof_hash)
                   << ",\"memory_budget_bytes\":" << memory_stats.budget_bytes
                   << ",\"memory_baseline_rss_bytes\":" << memory_stats.baseline_rss_bytes
                   << ",\"memory_sampled_rss_bytes\":" << memory_stats.sampled_rss_bytes

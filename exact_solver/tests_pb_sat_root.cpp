@@ -88,6 +88,9 @@ Graph test_graph() {
 void configure_test_budget(OptimizerV2Options& options) {
     options.time_limit = std::chrono::milliseconds(1000);
     options.pb_sat_root_max_gap = 32;
+    // These tests deliberately exercise the process-backed compatibility
+    // backend with fake solver/checker executables.
+    options.pb_sat_root_backend = PbSatRootBackend::external;
 }
 
 void test_disabled() {

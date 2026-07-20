@@ -149,9 +149,10 @@ proof-producing SAT backends remain optional:
 - The Clarabel SDP solving adapter requires `CUTWIDTH_ENABLE_SDP_PROTOTYPE=ON`,
   Conan option `with_sdp=True`, and a pinned Clarabel.cpp build supplied through
   `CUTWIDTH_CLARABEL_ROOT`.
-- External PB/SAT requires explicit solver and proof-checker paths. Native
-  incremental CaDiCaL is enabled with `CUTWIDTH_CADICAL_ROOT` pointing to the
-  pinned, prebuilt source checkout.
+- Embedded PB/SAT is enabled with `CUTWIDTH_CADICAL_ROOT` pointing to the pinned
+  source checkout; CMake compiles it with the active toolchain. The independent
+  in-memory DRAT checker is always built. External PB/SAT remains available with
+  explicit solver and checker paths.
 
 Pinned bootstrap helpers and their prerequisites are documented in
 `../tools/README.md`. SAT witnesses are checked as layouts, and UNSAT results

@@ -82,11 +82,14 @@ def test_capabilities_include_portable_bounds() -> None:
     assert available["lagrangian_bounds"]
     assert available["sdp_certificate_verifier"]
     assert available["pb_sat_root"]
-    assert available["bundled_cadical"]
-    assert available["bundled_drat_trim"]
+    if sys.platform != "win32":
+        assert available["bundled_cadical"]
+        assert available["bundled_drat_trim"]
 
 
 def test_bundled_proof_chain() -> None:
+    if sys.platform == "win32" and not boundedcuts.capabilities().get("bundled_cadical"):
+        pytest.skip("Bundled proof tool executables are omitted on Windows")
     tools = boundedcuts.proof_tools()
     provenance = boundedcuts.proof_tool_provenance()
     assert provenance["cadical"]["version"] == "2.1.3"
@@ -133,7 +136,7 @@ def test_bundled_proof_chain() -> None:
         assert "VERIFIED" in binary_checked.stdout + binary_checked.stderr
 
 
-def test_python_pb_sat_defaults_and_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_python_embedded_pb_sat_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     graph = boundedcuts.from_edges([[0, 1]])
     options = boundedcuts.SolveOptions()
     options.controller = "adaptive"
@@ -147,16 +150,15 @@ def test_python_pb_sat_defaults_and_cleanup(monkeypatch: pytest.MonkeyPatch) -> 
         captured["checker"] = native_options.pb_sat_root_checker
         captured["directory"] = native_options.pb_sat_root_dir
         captured["timeout"] = native_options.pb_sat_root_timeout
-        assert Path(native_options.pb_sat_root_dir).is_dir()
+        assert native_options.pb_sat_root_backend == "embedded"
         return sentinel
 
     monkeypatch.setattr(boundedcuts, "_native_solve", fake_solve)
     assert boundedcuts.solve(graph, options=options) is sentinel
-    bundled = boundedcuts.proof_tools()
-    assert captured["solver"] == bundled["cadical"]
-    assert captured["checker"] == bundled["drat_trim"]
+    assert captured["solver"] == ""
+    assert captured["checker"] == ""
+    assert captured["directory"] == ""
     assert captured["timeout"] == 90.0
-    assert not Path(str(captured["directory"])).exists()
     assert options.pb_sat_root_solver == ""
     assert options.pb_sat_root_checker == ""
     assert options.pb_sat_root_dir == ""
@@ -174,7 +176,7 @@ def test_cli_invocation() -> None:
     assert "Usage:" in completed.stdout
 
 
-def test_cli_auto_discovers_bundled_proof_tools(tmp_path: Path) -> None:
+def test_cli_defaults_to_embedded_proof_tools(tmp_path: Path) -> None:
     graph = tmp_path / "triangle.edgelist"
     graph.write_text("0 1\n1 2\n2 0\n", encoding="ascii")
     completed = subprocess.run(
@@ -195,8 +197,6 @@ def test_cli_auto_discovers_bundled_proof_tools(tmp_path: Path) -> None:
             "adaptive",
             "--adaptive-arms",
             "dfs,pb-sat-root",
-            "--pb-sat-root-dir",
-            str(tmp_path / "proof"),
             "--pb-sat-root-max-gap",
             "32",
         ],
@@ -206,3 +206,67 @@ def test_cli_auto_discovers_bundled_proof_tools(tmp_path: Path) -> None:
     )
     assert completed.returncode == 0, completed.stderr
     assert '"verified":true' in completed.stdout
+
+
+def test_embedded_unsat_validation() -> None:
+    # A simple triangle has cutwidth 2. Solving with threshold 1 is UNSAT.
+    edges = np.array([[0, 1], [1, 2], [2, 0]], dtype=np.uint32)
+    graph = boundedcuts.from_edges(edges)
+    options = boundedcuts.SolveOptions()
+    options.controller = "adaptive"
+    options.adaptive_arms = ["dfs", "pb-sat-root"]
+    options.pb_sat_root_backend = "embedded"
+    options.pb_sat_root_max_gap = 10
+    options.pb_sat_root_timeout = 5.0
+
+    result = boundedcuts.solve(graph, options=options)
+    assert result.optimal
+    assert result.lower_bound == 2
+    assert result.upper_bound == 2
+
+
+def test_sat_witness_verification() -> None:
+    # A path graph on 3 vertices has cutwidth 1. Solving with threshold 1 is SAT.
+    edges = np.array([[0, 1], [1, 2]], dtype=np.uint32)
+    graph = boundedcuts.from_edges(edges)
+    options = boundedcuts.SolveOptions()
+    options.controller = "adaptive"
+    options.adaptive_arms = ["dfs", "pb-sat-root"]
+    options.pb_sat_root_backend = "embedded"
+    options.pb_sat_root_max_gap = 10
+    options.pb_sat_root_timeout = 5.0
+
+    result = boundedcuts.solve(graph, options=options)
+    assert result.optimal
+    assert result.lower_bound == 1
+    assert result.upper_bound == 1
+
+
+def test_backend_validation() -> None:
+    edges = np.array([[0, 1]], dtype=np.uint32)
+    graph = boundedcuts.from_edges(edges)
+    options = boundedcuts.SolveOptions()
+    options.controller = "adaptive"
+    options.adaptive_arms = ["dfs", "pb-sat-root"]
+    options.pb_sat_root_backend = "invalid_backend"
+    options.pb_sat_root_timeout = 1.0
+    with pytest.raises(ValueError):
+        boundedcuts.solve(graph, options=options)
+
+
+def test_windows_dependency_check() -> None:
+    if sys.platform != "win32":
+        pytest.skip("Windows dependency check only runs on Windows")
+    # Inspect every shipped Windows binary, not only the Python extension.
+    package_dir = Path(boundedcuts.__file__).parent
+    pyd_files = list(package_dir.rglob("*.pyd"))
+    assert len(pyd_files) > 0, "No .pyd extension found"
+    pe_files = pyd_files + list(package_dir.rglob("*.exe")) + list(package_dir.rglob("*.dll"))
+
+    forbidden = [b"libgcc", b"libstdc++", b"libwinpthread", b"msys-"]
+    for pe_file in pe_files:
+        content = pe_file.read_bytes().lower()
+        for runtime in forbidden:
+            assert runtime not in content, (
+                f"Forbidden non-MSVC runtime {runtime.decode()} found in {pe_file.name}"
+            )

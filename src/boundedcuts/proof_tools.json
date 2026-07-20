@@ -9,6 +9,6 @@
     "commit": "2e3b2dc0ecf938addbd779d42877b6ed69d9a985",
     "source": "https://github.com/marijnheule/drat-trim",
     "license": "MIT",
-    "windows_patch": "open binary DRAT input with mode rb"
+    "embedded_adaptation": "portable byte-span input and fail-closed library result"
   }
 }

@@ -1,6 +1,7 @@
 #include "pb_encoding.hpp"
 #include "pb_solver.hpp"
 #include "pb_cadical_incremental.hpp"
+#include "pb_drat_trim_adapter.hpp"
 #include "pb_backend.hpp"
 #include "oracle.hpp"
 
@@ -267,53 +268,57 @@ void incremental_cadical_tests() {
     const auto unsat = session.solve(1, std::chrono::seconds(2));
     require(unsat.status == IncrementalStatus::unsat_exploratory,
             "incremental CaDiCaL did not retain tighter threshold");
-    require(!unsat.proof_path.empty(), "incremental CaDiCaL did not emit a proof");
+    require(!unsat.proof_bytes.empty(), "incremental CaDiCaL did not emit a proof");
+    const auto checked = verify_proof_in_memory(
+        encoded.formula, unsat.added_unit_clauses,
+        unsat.proof_bytes, std::chrono::seconds(2));
+    require(checked.status == DratCheckerStatus::verified,
+            "incremental CaDiCaL proof failed in-memory DRAT checking");
+
+    const auto direct_encoding = encode_cutwidth_threshold(triangle, 1, options);
+    IncrementalCadicalSession direct(
+        direct_encoding, 1, {0, 1, 2}, true);
+    const auto direct_unsat = direct.solve(1, std::chrono::seconds(2));
+    require(direct_unsat.status == IncrementalStatus::unsat_exploratory,
+            "direct native CaDiCaL UNSAT solve failed");
+    const auto direct_checked = verify_proof_in_memory(
+        direct_encoding.formula, direct_unsat.added_unit_clauses,
+        direct_unsat.proof_bytes, std::chrono::seconds(2));
+    require(direct_checked.status == DratCheckerStatus::verified,
+            "direct native CaDiCaL proof failed DRAT checking");
+
+    cutwidth::pb::DecisionOptions native_options;
+    native_options.solver = SolverKind::cadical;
+    native_options.encoding = CardinalityEncoding::totalizer;
+    native_options.channel_positions = true;
+    native_options.native_incremental = true;
+    native_options.external.time_limit = std::chrono::seconds(2);
+    const auto native_yes = cutwidth::pb::decide_cutwidth(
+        triangle, 2, native_options);
+    require(native_yes.decision.status == cutwidth::DecisionStatus::feasible &&
+            native_yes.provenance.witness_verified,
+            "certified native PB adapter rejected a feasible threshold");
+    const auto native_no = cutwidth::pb::decide_cutwidth(
+        triangle, 1, native_options);
+    require(native_no.decision.status == cutwidth::DecisionStatus::infeasible &&
+            native_no.provenance.proof_checked,
+            "certified native PB adapter accepted unchecked UNSAT");
+
     if (const char* checker = std::getenv("CUTWIDTH_DRAT_TRIM")) {
         ExternalSatOptions check_options;
         check_options.proof_checker_path = checker;
         check_options.time_limit = std::chrono::seconds(2);
-        const auto checked = check_drat_proof_external(
-            encoded.formula, unsat.added_unit_clauses,
-            unsat.proof_path, check_options);
-        require(checked.checked, "incremental CaDiCaL proof failed DRAT checking");
-
-        const auto direct_encoding = encode_cutwidth_threshold(triangle, 1, options);
-        IncrementalCadicalSession direct(
-            direct_encoding, 1, {0, 1, 2}, true);
-        const auto direct_unsat = direct.solve(1, std::chrono::seconds(2));
-        require(direct_unsat.status == IncrementalStatus::unsat_exploratory,
-                "direct native CaDiCaL UNSAT solve failed");
-        const auto direct_checked = check_drat_proof_external(
-            direct_encoding.formula, direct_unsat.added_unit_clauses,
-            direct_unsat.proof_path, check_options);
-        require(direct_checked.checked,
-                "direct native CaDiCaL proof failed DRAT checking");
-
-        cutwidth::pb::DecisionOptions native_options;
-        native_options.solver = SolverKind::cadical;
-        native_options.encoding = CardinalityEncoding::totalizer;
-        native_options.channel_positions = true;
-        native_options.native_incremental = true;
-        native_options.external.proof_checker_path = checker;
-        native_options.external.time_limit = std::chrono::seconds(2);
-        const auto native_yes = cutwidth::pb::decide_cutwidth(
-            triangle, 2, native_options);
-        require(native_yes.decision.status == cutwidth::DecisionStatus::feasible &&
-                native_yes.provenance.witness_verified,
-                "certified native PB adapter rejected a feasible threshold");
-        const auto native_no = cutwidth::pb::decide_cutwidth(
-            triangle, 1, native_options);
-        require(native_no.decision.status == cutwidth::DecisionStatus::infeasible &&
-                native_no.provenance.proof_checked,
-                "certified native PB adapter accepted unchecked UNSAT");
-
         const auto invalid_proof = std::filesystem::temp_directory_path() /
-            "cutwidth-invalid-proof.drat";
-        { std::ofstream output(invalid_proof); output << "0\n"; }
-        const auto rejected = check_drat_proof_external(
-            encoded.formula, {}, invalid_proof.string(), check_options);
+            "cutwidth-incremental-proof.drat";
+        { std::ofstream output(invalid_proof, std::ios::binary);
+          output.write(reinterpret_cast<const char*>(unsat.proof_bytes.data()),
+                       static_cast<std::streamsize>(unsat.proof_bytes.size())); }
+        const auto external_checked = check_drat_proof_external(
+            encoded.formula, unsat.added_unit_clauses,
+            invalid_proof.string(), check_options);
         std::filesystem::remove(invalid_proof);
-        require(!rejected.checked, "invalid incremental DRAT proof was accepted");
+        require(external_checked.checked,
+                "external and embedded proof checkers disagreed");
     }
 #else
     require(!session.available(), "uncompiled incremental CaDiCaL reported available");

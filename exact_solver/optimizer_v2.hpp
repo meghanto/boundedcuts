@@ -25,6 +25,7 @@ enum class HeuristicTiebreak { width, cut_profile };
 enum class HeuristicSearch { basic, portfolio };
 enum class ControllerMode { static_policy, adaptive };
 enum class ThresholdSchedulerMode { recurrence, value_aware };
+enum class PbSatRootBackend { embedded, external };
 
 struct MilestoneSnapshot {
     std::uint64_t scheduled_milliseconds = 0;
@@ -122,6 +123,7 @@ struct OptimizerV2Options {
     std::string pb_sat_root_solver;
     std::string pb_sat_root_checker;
     std::string pb_sat_root_dir;
+    PbSatRootBackend pb_sat_root_backend = PbSatRootBackend::embedded;
     std::chrono::milliseconds pb_sat_root_timeout{0};
     std::optional<std::size_t> pb_sat_root_q;
     std::uint32_t pb_sat_root_max_gap = 2;
@@ -309,6 +311,10 @@ struct OptimizerV2Stats {
     std::string pb_sat_root_last_cnf_path;
     std::string pb_sat_root_last_proof_path;
     std::string pb_sat_root_last_result;
+    std::string pb_sat_root_backend;
+    std::string pb_sat_root_provenance;
+    std::size_t pb_sat_root_proof_bytes = 0;
+    std::string pb_sat_root_proof_hash;
 };
 
 struct OptimizerV2Result {

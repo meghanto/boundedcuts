@@ -4,8 +4,15 @@
 #include <limits>
 #include <filesystem>
 #include <utility>
+#include <sstream>
+#include <iomanip>
 #if defined(__unix__) || defined(__APPLE__)
 #include <unistd.h>
+#endif
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#include <fcntl.h>
 #endif
 
 #ifdef CUTWIDTH_HAVE_CADICAL
@@ -15,6 +22,18 @@
 namespace cutwidth::pb {
 namespace {
 using Clock = std::chrono::steady_clock;
+
+std::string fnv1a64_bytes(const std::vector<std::uint8_t>& bytes) {
+    std::uint64_t hash = 0xcbf29ce484222325ULL;
+    for (std::uint8_t byte : bytes) {
+        hash ^= byte;
+        hash *= 0x00000100000001B3ULL;
+    }
+    std::ostringstream out;
+    out << "fnv1a64:" << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return out.str();
+}
+
 }
 
 struct IncrementalCadicalSession::Impl {
@@ -28,10 +47,15 @@ struct IncrementalCadicalSession::Impl {
     std::vector<std::int32_t> added_units;
     bool proof_open = false;
     bool keep_temporary_files = false;
+    std::vector<std::uint8_t> proof_bytes;
 #ifdef CUTWIDTH_HAVE_CADICAL
+    std::unique_ptr<InMemoryDratTracer> drat_tracer;
     struct DeadlineTerminator final : CaDiCaL::Terminator {
         Clock::time_point deadline = Clock::time_point::max();
-        bool terminate() override { return Clock::now() >= deadline; }
+        const InMemoryDratTracer* tracer = nullptr;
+        bool terminate() override {
+            return Clock::now() >= deadline || (tracer && tracer->overflowed());
+        }
     } terminator;
     CaDiCaL::Solver solver;
 #endif
@@ -50,16 +74,10 @@ IncrementalCadicalSession::IncrementalCadicalSession(
 #ifdef CUTWIDTH_HAVE_CADICAL
     impl_->solver.set("quiet", 1);
     if (trace_proof) {
-#if defined(__unix__) || defined(__APPLE__)
-        char directory_template[] = "/tmp/cutwidth-pb-inc-XXXXXX";
-        if (char* directory = ::mkdtemp(directory_template)) {
-            impl_->temporary_directory = directory;
-            impl_->proof_path = (std::filesystem::path(directory) / "proof.drat").string();
-            impl_->proof_open = impl_->solver.trace_proof(impl_->proof_path.c_str());
-        }
-#endif
-        if (!impl_->proof_open)
-            impl_->diagnostic = "could not start incremental DRAT trace";
+        impl_->drat_tracer = std::make_unique<InMemoryDratTracer>(impl_->proof_bytes, true);
+        impl_->terminator.tracer = impl_->drat_tracer.get();
+        impl_->solver.connect_proof_tracer(impl_->drat_tracer.get(), false);
+        impl_->proof_open = true;
     }
     for (const auto& clause : encoding.formula.clauses) {
         for (const auto literal : clause) impl_->solver.add(literal);
@@ -92,7 +110,7 @@ IncrementalCadicalSession::IncrementalCadicalSession(
 IncrementalCadicalSession::~IncrementalCadicalSession() {
 #ifdef CUTWIDTH_HAVE_CADICAL
     if (impl_ && impl_->proof_open) {
-        impl_->solver.close_proof_trace(false);
+        impl_->solver.disconnect_proof_tracer(impl_->drat_tracer.get());
         impl_->proof_open = false;
     }
 #endif
@@ -153,10 +171,14 @@ IncrementalResult IncrementalCadicalSession::solve(
         result.status = IncrementalStatus::unsat_exploratory;
         if (impl_->proof_open) {
             impl_->solver.conclude();
-            impl_->solver.close_proof_trace(false);
+            impl_->solver.disconnect_proof_tracer(impl_->drat_tracer.get());
             impl_->proof_open = false;
-            result.proof_path = impl_->proof_path;
+            result.proof_path = "";
             result.added_unit_clauses = impl_->added_units;
+            result.proof_backend = "embedded";
+            result.proof_provenance = "in-memory-bytes";
+            result.proof_bytes = impl_->proof_bytes;
+            result.proof_hash = fnv1a64_bytes(result.proof_bytes);
         }
     } else {
         result.status = IncrementalStatus::timed_out;

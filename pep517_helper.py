@@ -21,18 +21,41 @@ def _bundled_proof_tools(temporary_path: Path, environment: dict[str, str]):
         environment.get("BOUNDEDCUTS_PB_ROOT", temporary_path / "pb-sat")
     ).resolve()
     jobs = str(max(1, os.cpu_count() or 1))
+
+    cadical_root = destination / "cadical"
+    checker_root = destination / "drat-trim"
+
+    def clone_pin(url, commit, dir_path):
+        dir_path.mkdir(parents=True, exist_ok=True)
+        if not (dir_path / ".git").is_dir():
+            subprocess.run(["git", "clone", "--filter=blob:none", url, str(dir_path)], check=True)
+        try:
+            current = subprocess.run(
+                ["git", "-C", str(dir_path), "rev-parse", "HEAD"],
+                capture_output=True, text=True, check=True
+            ).stdout.strip()
+            if current == commit:
+                return
+        except Exception:
+            pass
+        subprocess.run(["git", "-C", str(dir_path), "fetch", "--quiet", "origin", commit], check=True)
+        subprocess.run(["git", "-C", str(dir_path), "checkout", "--detach", "--quiet", commit], check=True)
+
+    cadical_commit = "f13d74439a5b5c963ac5b02d05ce93a8098018b8"
+    drat_trim_commit = "2e3b2dc0ecf938addbd779d42877b6ed69d9a985"
+
+    clone_pin("https://github.com/arminbiere/cadical.git", cadical_commit, cadical_root)
+    clone_pin("https://github.com/marijnheule/drat-trim.git", drat_trim_commit, checker_root)
+
     if os.name == "nt":
-        subprocess.run(
-            [
-                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", str(_ROOT / "tools" / "bootstrap_pb_sat_windows.ps1"),
-                "-Destination", str(destination), "-Jobs", jobs,
-            ],
-            cwd=_ROOT,
-            env=environment,
-            check=True,
-        )
-        suffix = ".exe"
+        paths = {
+            "cadical": None,
+            "checker": None,
+            "cadical_root": cadical_root,
+            "checker_root": checker_root,
+            "cadical_license": cadical_root / "LICENSE",
+            "checker_license": checker_root / "LICENSE",
+        }
     else:
         subprocess.run(
             ["bash", str(_ROOT / "tools" / "bootstrap_wheel_pb_sat.sh"),
@@ -41,19 +64,20 @@ def _bundled_proof_tools(temporary_path: Path, environment: dict[str, str]):
             env=environment,
             check=True,
         )
-        suffix = ""
+        paths = {
+            "cadical": cadical_root / "build" / "cadical",
+            "checker": checker_root / "drat-trim",
+            "cadical_root": cadical_root,
+            "checker_root": checker_root,
+            "cadical_license": cadical_root / "LICENSE",
+            "checker_license": checker_root / "LICENSE",
+        }
 
-    cadical_root = destination / "cadical"
-    checker_root = destination / "drat-trim"
-    paths = {
-        "cadical": cadical_root / "build" / f"cadical{suffix}",
-        "checker": checker_root / f"drat-trim{suffix}",
-        "cadical_license": cadical_root / "LICENSE",
-        "checker_license": checker_root / "LICENSE",
-    }
-    missing = [str(path) for path in paths.values() if not path.is_file()]
+    missing = [str(path) for path in [paths["cadical_license"], paths["checker_license"]] if not path.is_file()]
+    if os.name != "nt":
+        missing.extend(str(paths[key]) for key in ["cadical", "checker"] if not paths[key].is_file())
     if missing:
-        raise RuntimeError(f"bundled proof-tool artifacts are missing: {missing}")
+        raise RuntimeError(f"bundled proof-tool artifacts or licenses are missing: {missing}")
     return paths
 
 
@@ -117,11 +141,16 @@ def _native_build_environment():
             "-DCUTWIDTH_ENABLE_HIGHS=OFF",
             "-DCUTWIDTH_ENABLE_ONETBB=OFF",
             "-DCUTWIDTH_ENABLE_SDP_PROTOTYPE=OFF",
-            f"-DCUTWIDTH_BUNDLED_CADICAL:FILEPATH={proof_tools['cadical']}",
-            f"-DCUTWIDTH_BUNDLED_DRAT_TRIM:FILEPATH={proof_tools['checker']}",
             f"-DCUTWIDTH_BUNDLED_CADICAL_LICENSE:FILEPATH={proof_tools['cadical_license']}",
             f"-DCUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE:FILEPATH={proof_tools['checker_license']}",
+            f"-DCUTWIDTH_CADICAL_ROOT:PATH={proof_tools['cadical_root']}",
+            f"-DCUTWIDTH_DRAT_TRIM_ROOT:PATH={proof_tools['checker_root']}",
         ]
+        if proof_tools["cadical"] is not None:
+            baseline.extend((
+                f"-DCUTWIDTH_BUNDLED_CADICAL:FILEPATH={proof_tools['cadical']}",
+                f"-DCUTWIDTH_BUNDLED_DRAT_TRIM:FILEPATH={proof_tools['checker']}",
+            ))
         if sys.platform == "darwin":
             baseline.append(
                 "-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING="

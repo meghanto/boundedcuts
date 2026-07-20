@@ -1,12 +1,24 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(cutwidth_exact VERSION 0.1.0 LANGUAGES CXX)
+project(cutwidth_exact VERSION 0.1.0 LANGUAGES C CXX)
 
 option(CUTWIDTH_BUILD_TESTS "Build the cutwidth test suite" ON)
 option(CUTWIDTH_ENABLE_SDP_PROTOTYPE "Build experimental SDP operator prototype" OFF)
 option(CUTWIDTH_ENABLE_ONETBB "Build the legacy oneTBB parallel executor compatibility path" OFF)
 set(CUTWIDTH_CLARABEL_ROOT "" CACHE PATH "Pinned Clarabel.cpp source root (optional)")
 set(CUTWIDTH_CADICAL_ROOT "" CACHE PATH "Pinned CaDiCaL 2.1.3 source root (optional)")
+set(CUTWIDTH_DRAT_TRIM_ROOT "" CACHE PATH "Pinned DRAT-trim source root (optional)")
+
+if(CUTWIDTH_CADICAL_ROOT OR CUTWIDTH_DRAT_TRIM_ROOT)
+    find_package(Git REQUIRED)
+endif()
+if(CUTWIDTH_DRAT_TRIM_ROOT)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${CUTWIDTH_DRAT_TRIM_ROOT}" rev-parse HEAD
+        OUTPUT_VARIABLE DRAT_TRIM_PIN OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT DRAT_TRIM_PIN STREQUAL "2e3b2dc0ecf938addbd779d42877b6ed69d9a985")
+        message(FATAL_ERROR "CUTWIDTH_DRAT_TRIM_ROOT is not the pinned DRAT-trim revision")
+    endif()
+endif()
 
 add_library(cutwidth_solver
     canonical_ownership.cpp
@@ -41,21 +53,117 @@ add_library(cutwidth_solver
     threshold_portfolio.cpp
     vertex_set.cpp
     lagrangian_bound.cpp
+    pb_drat_trim_adapter.cpp
+    drat_trim_impl.c
 )
 if(CUTWIDTH_CADICAL_ROOT)
-    execute_process(COMMAND git -C "${CUTWIDTH_CADICAL_ROOT}" rev-parse HEAD
+    execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${CUTWIDTH_CADICAL_ROOT}" rev-parse HEAD
         OUTPUT_VARIABLE CADICAL_PIN OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(NOT CADICAL_PIN STREQUAL "f13d74439a5b5c963ac5b02d05ce93a8098018b8")
         message(FATAL_ERROR "CUTWIDTH_CADICAL_ROOT is not pinned CaDiCaL v2.1.3")
     endif()
-    if(NOT EXISTS "${CUTWIDTH_CADICAL_ROOT}/src/cadical.hpp" OR
-       NOT EXISTS "${CUTWIDTH_CADICAL_ROOT}/build/libcadical.a")
-        message(FATAL_ERROR "Pinned CaDiCaL headers/library are not built")
+    if(NOT EXISTS "${CUTWIDTH_CADICAL_ROOT}/src/cadical.hpp")
+        message(FATAL_ERROR "Pinned CaDiCaL source headers missing")
     endif()
+
+    set(CADICAL_SOURCES
+        "${CUTWIDTH_CADICAL_ROOT}/src/analyze.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/arena.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/assume.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/averages.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/backtrack.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/backward.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/bins.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/block.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/ccadical.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/checker.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/clause.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/collect.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/compact.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/condition.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/config.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/constrain.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/contract.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/cover.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/decide.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/decompose.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/deduplicate.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/drattracer.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/elim.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/ema.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/extend.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/external.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/external_propagate.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/file.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/flags.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/flip.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/format.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/frattracer.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/gates.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/idruptracer.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/instantiate.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/internal.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/ipasir.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/lidruptracer.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/limit.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/logging.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/lookahead.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/lratbuilder.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/lratchecker.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/lrattracer.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/lucky.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/message.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/minimize.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/occs.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/options.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/parse.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/phases.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/probe.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/profile.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/proof.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/propagate.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/queue.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/random.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/reap.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/reduce.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/rephase.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/report.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/resources.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/restart.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/restore.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/score.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/shrink.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/signal.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/solution.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/solver.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/stats.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/subsume.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/terminal.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/ternary.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/transred.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/util.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/var.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/veripbtracer.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/version.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/vivify.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/walk.cpp"
+        "${CUTWIDTH_CADICAL_ROOT}/src/watch.cpp"
+    )
+
+    add_library(cadical STATIC ${CADICAL_SOURCES})
+    set_property(TARGET cadical PROPERTY POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(cadical PUBLIC "${CUTWIDTH_CADICAL_ROOT}/src")
+    target_compile_definitions(cadical PRIVATE NBUILD)
+    if(MSVC)
+        target_compile_definitions(cadical PRIVATE __WIN32 NFLEXIBLE)
+        target_include_directories(cadical PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/msvc_compat")
+        target_link_libraries(cadical PRIVATE Psapi)
+    endif()
+
+    target_link_libraries(cutwidth_solver PRIVATE cadical)
     target_include_directories(cutwidth_solver SYSTEM PRIVATE "${CUTWIDTH_CADICAL_ROOT}/src")
-    target_link_libraries(cutwidth_solver PRIVATE "${CUTWIDTH_CADICAL_ROOT}/build/libcadical.a")
     target_compile_definitions(cutwidth_solver PUBLIC CUTWIDTH_HAVE_CADICAL=1)
-    message(STATUS "Pinned native CaDiCaL incremental backend enabled")
+    message(STATUS "Pinned native CaDiCaL incremental backend enabled via source compile")
 endif()
 if(CUTWIDTH_ENABLE_SDP_PROTOTYPE)
     target_sources(cutwidth_solver PRIVATE sdp_admm.cpp clarabel_sdp_adapter.cpp)
@@ -241,6 +349,10 @@ if(CUTWIDTH_BUILD_TESTS)
         FAKE_TOOL_PATH="$<TARGET_FILE:cutwidth_fake_tool>"
     )
     add_test(NAME cutwidth_tests_pb_sat_root COMMAND cutwidth_tests_pb_sat_root)
+
+    add_executable(cutwidth_tests_pb_sat_embedded tests_pb_sat_embedded.cpp)
+    target_link_libraries(cutwidth_tests_pb_sat_embedded PRIVATE cutwidth_solver)
+    add_test(NAME cutwidth_tests_pb_sat_embedded COMMAND cutwidth_tests_pb_sat_embedded)
 endif()
 
 option(CUTWIDTH_BUILD_PYTHON "Build Python bindings using nanobind" OFF)
@@ -260,15 +372,19 @@ if(CUTWIDTH_BUILD_PYTHON)
         RUNTIME DESTINATION boundedcuts)
     install(TARGETS cutwidth_exact RUNTIME DESTINATION boundedcuts)
 
-    foreach(required_path IN ITEMS
-            CUTWIDTH_BUNDLED_CADICAL CUTWIDTH_BUNDLED_DRAT_TRIM
-            CUTWIDTH_BUNDLED_CADICAL_LICENSE CUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE)
+    set(REQUIRED_PATHS CUTWIDTH_BUNDLED_CADICAL_LICENSE CUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE)
+    if(NOT WIN32)
+        list(APPEND REQUIRED_PATHS CUTWIDTH_BUNDLED_CADICAL CUTWIDTH_BUNDLED_DRAT_TRIM)
+    endif()
+    foreach(required_path IN LISTS REQUIRED_PATHS)
         if("${${required_path}}" STREQUAL "" OR NOT EXISTS "${${required_path}}")
             message(FATAL_ERROR "${required_path} must name an existing file for Python wheels")
         endif()
     endforeach()
-    install(PROGRAMS "${CUTWIDTH_BUNDLED_CADICAL}" "${CUTWIDTH_BUNDLED_DRAT_TRIM}"
-        DESTINATION boundedcuts/bin)
+    if(NOT WIN32)
+        install(PROGRAMS "${CUTWIDTH_BUNDLED_CADICAL}" "${CUTWIDTH_BUNDLED_DRAT_TRIM}"
+            DESTINATION boundedcuts/bin)
+    endif()
     install(FILES "${CUTWIDTH_BUNDLED_CADICAL_LICENSE}"
         DESTINATION boundedcuts/licenses RENAME CaDiCaL-LICENSE.txt)
     install(FILES "${CUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE}"

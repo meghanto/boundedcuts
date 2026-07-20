@@ -39,6 +39,7 @@ struct SolveOptions {
     double pb_sat_root_timeout = 0.0;
     std::optional<std::size_t> pb_sat_root_q;
     std::uint32_t pb_sat_root_max_gap = 2;
+    std::string pb_sat_root_backend = "embedded";
 };
 
 struct SolveResult {
@@ -57,6 +58,10 @@ struct SolveResult {
     double pb_sat_root_solver_seconds = 0.0;
     double pb_sat_root_checker_seconds = 0.0;
     std::string pb_sat_root_last_result;
+    std::string pb_sat_root_backend;
+    std::string pb_sat_root_provenance;
+    std::size_t pb_sat_root_proof_bytes = 0;
+    std::string pb_sat_root_proof_hash;
     nb::object ordering;
 };
 
@@ -82,10 +87,18 @@ void validate(const SolveOptions& options) {
     if (contains(options.adaptive_arms, "pb-sat-root")) {
         if (options.controller != "adaptive")
             throw std::invalid_argument("pb-sat-root requires the adaptive controller");
-        if (options.pb_sat_root_solver.empty() || options.pb_sat_root_checker.empty() ||
-            options.pb_sat_root_dir.empty() || options.pb_sat_root_timeout <= 0.0)
-            throw std::invalid_argument(
-                "pb-sat-root requires solver, checker, directory, and a positive timeout");
+        if (options.pb_sat_root_backend != "embedded" && options.pb_sat_root_backend != "external")
+            throw std::invalid_argument("pb_sat_root_backend must be 'embedded' or 'external'");
+        if (options.pb_sat_root_backend == "external") {
+            if (options.pb_sat_root_solver.empty() || options.pb_sat_root_checker.empty() ||
+                options.pb_sat_root_dir.empty() || options.pb_sat_root_timeout <= 0.0)
+                throw std::invalid_argument(
+                    "pb-sat-root requires solver, checker, directory, and a positive timeout in external mode");
+        } else {
+            if (options.pb_sat_root_timeout <= 0.0)
+                throw std::invalid_argument(
+                    "pb-sat-root requires a positive timeout in embedded mode");
+        }
     }
 }
 
@@ -123,6 +136,11 @@ cutwidth::OptimizerV2Options native_options(const SolveOptions& input) {
     }
     options.pb_sat_root_q = input.pb_sat_root_q;
     options.pb_sat_root_max_gap = input.pb_sat_root_max_gap;
+    if (input.pb_sat_root_backend == "embedded") {
+        options.pb_sat_root_backend = cutwidth::PbSatRootBackend::embedded;
+    } else if (input.pb_sat_root_backend == "external") {
+        options.pb_sat_root_backend = cutwidth::PbSatRootBackend::external;
+    }
 
     if (options.controller == cutwidth::ControllerMode::adaptive) {
         options.use_partial_bounds = contains(options.adaptive_arms, "bounds");
@@ -171,6 +189,10 @@ SolveResult solve(const cutwidth::Graph& graph, const SolveOptions& input) {
     result.pb_sat_root_solver_seconds = raw.stats.pb_sat_root_solver_seconds;
     result.pb_sat_root_checker_seconds = raw.stats.pb_sat_root_checker_seconds;
     result.pb_sat_root_last_result = raw.stats.pb_sat_root_last_result;
+    result.pb_sat_root_backend = raw.stats.pb_sat_root_backend;
+    result.pb_sat_root_provenance = raw.stats.pb_sat_root_provenance;
+    result.pb_sat_root_proof_bytes = raw.stats.pb_sat_root_proof_bytes;
+    result.pb_sat_root_proof_hash = raw.stats.pb_sat_root_proof_hash;
     if (input.verify) {
         if (!graph.validate_ordering(raw.ordering) ||
             graph.ordering_cutwidth(raw.ordering) != raw.upper_bound)
@@ -217,7 +239,8 @@ NB_MODULE(_boundedcuts, module) {
         .def_rw("pb_sat_root_dir", &SolveOptions::pb_sat_root_dir)
         .def_rw("pb_sat_root_timeout", &SolveOptions::pb_sat_root_timeout)
         .def_rw("pb_sat_root_q", &SolveOptions::pb_sat_root_q)
-        .def_rw("pb_sat_root_max_gap", &SolveOptions::pb_sat_root_max_gap);
+        .def_rw("pb_sat_root_max_gap", &SolveOptions::pb_sat_root_max_gap)
+        .def_rw("pb_sat_root_backend", &SolveOptions::pb_sat_root_backend);
 
     nb::class_<SolveResult>(module, "SolveResult")
         .def_ro("optimal", &SolveResult::optimal)
@@ -235,6 +258,10 @@ NB_MODULE(_boundedcuts, module) {
         .def_ro("pb_sat_root_solver_seconds", &SolveResult::pb_sat_root_solver_seconds)
         .def_ro("pb_sat_root_checker_seconds", &SolveResult::pb_sat_root_checker_seconds)
         .def_ro("pb_sat_root_last_result", &SolveResult::pb_sat_root_last_result)
+        .def_ro("pb_sat_root_backend", &SolveResult::pb_sat_root_backend)
+        .def_ro("pb_sat_root_provenance", &SolveResult::pb_sat_root_provenance)
+        .def_ro("pb_sat_root_proof_bytes", &SolveResult::pb_sat_root_proof_bytes)
+        .def_ro("pb_sat_root_proof_hash", &SolveResult::pb_sat_root_proof_hash)
         .def_ro("ordering", &SolveResult::ordering);
 
     module.def("solve", &solve, nb::arg("graph"), nb::arg("options"));
@@ -247,6 +274,7 @@ NB_MODULE(_boundedcuts, module) {
         result["sdp_formulation"] = true;
         result["sdp_certificate_verifier"] = true;
         result["pb_sat_root"] = true;
+        result["in_memory_drat_checker"] = true;
 #ifdef CUTWIDTH_HAVE_CLARABEL_SDP
         result["clarabel"] = true;
 #else
@@ -254,8 +282,10 @@ NB_MODULE(_boundedcuts, module) {
 #endif
 #ifdef CUTWIDTH_HAVE_CADICAL
         result["cadical"] = true;
+        result["embedded_pb_sat_root"] = true;
 #else
         result["cadical"] = false;
+        result["embedded_pb_sat_root"] = false;
 #endif
 #ifdef CUTWIDTH_HAVE_HIGHS
         result["highs"] = true;
