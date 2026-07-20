@@ -154,9 +154,16 @@ if(CUTWIDTH_CADICAL_ROOT)
     set_property(TARGET cadical PROPERTY POSITION_INDEPENDENT_CODE ON)
     target_include_directories(cadical PUBLIC "${CUTWIDTH_CADICAL_ROOT}/src")
     target_compile_definitions(cadical PRIVATE NBUILD)
+    if(APPLE)
+        # CaDiCaL's configure probe emits this on macOS versions whose SDK
+        # does not declare closefrom(3).
+        target_compile_definitions(cadical PRIVATE NCLOSEFROM)
+    endif()
     if(MSVC)
         target_compile_definitions(cadical PRIVATE __WIN32 NFLEXIBLE)
         target_include_directories(cadical PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/msvc_compat")
+        target_compile_options(cadical PRIVATE
+            "/FI${CMAKE_CURRENT_SOURCE_DIR}/msvc_compat/cadical_msvc.hpp")
         target_link_libraries(cadical PRIVATE Psapi)
     endif()
 
