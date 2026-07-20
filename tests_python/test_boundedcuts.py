@@ -381,6 +381,24 @@ def test_sdp_mapping_and_telemetry() -> None:
     assert result.status in ("OPTIMAL", "FEASIBLE")
 
 
+def test_sdp_budget_defaults_and_explicit_unlimited_controls() -> None:
+    options = boundedcuts.SolveOptions()
+    assert options.sdp_total_time == 5.0
+    assert options.sdp_max_calls == 2
+    assert options.sdp_max_state_dimension == 64
+
+    # Zero is deliberately available to callers who want the native unlimited
+    # oracle semantics.  The actual oracle remains opt-in through the arm.
+    options.sdp_total_time = 0.0
+    options.sdp_max_calls = 0
+    options.sdp_max_state_dimension = 0
+    options.controller = "adaptive"
+    options.adaptive_arms = ["dfs", "sdp"]
+    graph = boundedcuts.from_edges(np.array([[0, 1]], dtype=np.uint32))
+    result = boundedcuts.solve(graph, options=options)
+    assert result.status == "OPTIMAL"
+
+
 def test_sdp_disabled_by_default() -> None:
     edges = np.array([[0, 1]], dtype=np.uint32)
     graph = boundedcuts.from_edges(edges)

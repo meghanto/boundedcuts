@@ -32,6 +32,14 @@ struct SolveOptions {
     std::vector<std::string> adaptive_arms{"bounds", "dfs", "alns", "sdp", "residual-dp"};
     bool verify = true;
 
+    // Partial-state SDP is opt-in through the adaptive "sdp" arm.  When it
+    // is enabled, these defaults keep an individual expensive oracle from
+    // consuming an otherwise finite solve budget.  Zero retains the native
+    // unlimited semantics for callers that explicitly request it.
+    double sdp_total_time = 5.0;
+    std::size_t sdp_max_calls = 2;
+    std::size_t sdp_max_state_dimension = 64;
+
     // pb-sat-root fields
     std::string pb_sat_root_solver;
     std::string pb_sat_root_checker;
@@ -107,6 +115,8 @@ void validate(const SolveOptions& options) {
         throw std::invalid_argument("adaptive_arms must contain 'dfs'");
     if (!std::isfinite(options.pb_sat_root_timeout) || options.pb_sat_root_timeout < 0.0)
         throw std::invalid_argument("pb_sat_root_timeout must be finite and non-negative");
+    if (!std::isfinite(options.sdp_total_time) || options.sdp_total_time < 0.0)
+        throw std::invalid_argument("sdp_total_time must be finite and non-negative");
     for (const auto& arm : options.adaptive_arms) {
         if (arm != "bounds" && arm != "dfs" && arm != "alns" && arm != "sdp" &&
             arm != "residual-dp" && arm != "pb-sat-root")
@@ -150,6 +160,17 @@ cutwidth::OptimizerV2Options native_options(const SolveOptions& input) {
     options.adaptive_arms = input.adaptive_arms;
     if (input.controller == "adaptive" && contains(input.adaptive_arms, "sdp")) {
         options.sdp_schedule = cutwidth::sdp::SdpSchedule::adaptive;
+        if (input.sdp_total_time > 0.0) {
+            constexpr double maximum = static_cast<double>(
+                std::numeric_limits<std::chrono::milliseconds::rep>::max());
+            const double milliseconds = std::ceil(input.sdp_total_time * 1000.0);
+            if (milliseconds > maximum)
+                throw std::invalid_argument("sdp_total_time is too large");
+            options.sdp_total_time = std::chrono::milliseconds(
+                static_cast<std::chrono::milliseconds::rep>(milliseconds));
+        }
+        options.sdp_max_calls = input.sdp_max_calls;
+        options.sdp_max_state_dimension = input.sdp_max_state_dimension;
     } else {
         options.sdp_schedule = cutwidth::sdp::SdpSchedule::off;
     }
@@ -300,6 +321,9 @@ NB_MODULE(_boundedcuts, module) {
         .def_rw("memory_budget_bytes", &SolveOptions::memory_budget_bytes)
         .def_rw("adaptive_arms", &SolveOptions::adaptive_arms)
         .def_rw("verify", &SolveOptions::verify)
+        .def_rw("sdp_total_time", &SolveOptions::sdp_total_time)
+        .def_rw("sdp_max_calls", &SolveOptions::sdp_max_calls)
+        .def_rw("sdp_max_state_dimension", &SolveOptions::sdp_max_state_dimension)
         .def_rw("pb_sat_root_solver", &SolveOptions::pb_sat_root_solver)
         .def_rw("pb_sat_root_checker", &SolveOptions::pb_sat_root_checker)
         .def_rw("pb_sat_root_dir", &SolveOptions::pb_sat_root_dir)
