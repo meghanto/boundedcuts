@@ -254,6 +254,11 @@ SolveResult solve(const cutwidth::Graph& graph, const SolveOptions& input) {
     result.sdp_state_uncertified = raw.stats.sdp_state_uncertified;
     result.sdp_state_dimension_rejections = raw.stats.sdp_state_dimension_rejections;
     result.sdp_state_preferred_max_dimension = raw.stats.sdp_state_preferred_max_dimension;
+#ifdef CUTWIDTH_HAVE_CLARABEL_SDP
+    // Backend availability is a build/runtime capability, independent of
+    // whether this particular graph admitted an SDP job before it was solved.
+    result.sdp_available = true;
+#endif
     if (input.verify) {
         if (!graph.validate_ordering(raw.ordering) ||
             graph.ordering_cutwidth(raw.ordering) != raw.upper_bound)
