@@ -413,3 +413,20 @@ def test_sdp_capability_safe_fallback() -> None:
     assert result.sdp_available == has_clarabel
     if not has_clarabel:
         assert result.sdp_certified_lower_bound is None
+
+
+def test_clarabel_capability_and_packaging() -> None:
+    capabilities = boundedcuts.capabilities()
+    if sys.platform == "win32":
+        # On Windows, the wheel build MUST include Clarabel SDP capability
+        assert capabilities.get("clarabel"), "Clarabel SDP backend must be enabled on Windows"
+        # Check that the packaged library and provenance are present
+        package_dir = Path(boundedcuts.__file__).parent
+        dlls = list(package_dir.rglob("clarabel_c.dll"))
+        assert len(dlls) > 0, "clarabel_c.dll must be packaged beside the extension on Windows"
+
+        licenses = list(package_dir.rglob("Clarabel-LICENSE.txt"))
+        assert len(licenses) > 0, "Clarabel license must be packaged beside the extension on Windows"
+
+        provenance = list(package_dir.rglob("clarabel_provenance.txt"))
+        assert len(provenance) > 0, "Clarabel provenance must be packaged beside the extension on Windows"

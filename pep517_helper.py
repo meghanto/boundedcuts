@@ -98,34 +98,73 @@ def _native_build_environment():
 
         proof_tools = _bundled_proof_tools(temporary_path, environment)
 
+        # On Windows: fetch/pin Clarabel.cpp, set conan option with_sdp=True
+        conan_options = ["boost/*:header_only=True"]
+        clarabel_root = None
+        if os.name == "nt":
+            conan_options.append("with_sdp=True")
+            clarabel_root = temporary_path / "clarabel"
+            clarabel_root.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "clone", "--filter=blob:none", "https://github.com/oxfordcontrol/Clarabel.cpp.git", str(clarabel_root)], check=True)
+            subprocess.run(["git", "-C", str(clarabel_root), "fetch", "--quiet", "origin", "0de6259a3edfd5cc041ec42b2148599ce63e73cb"], check=True)
+            subprocess.run(["git", "-C", str(clarabel_root), "checkout", "--detach", "--quiet", "0de6259a3edfd5cc041ec42b2148599ce63e73cb"], check=True)
+            subprocess.run(["git", "-C", str(clarabel_root), "submodule", "update", "--init", "--recursive"], check=True)
+
         subprocess.run(
             [conan, "profile", "detect", "--force"],
             cwd=_ROOT,
             env=environment,
             check=True,
         )
+
+        conan_args = [
+            conan,
+            "install",
+            str(_ROOT / "exact_solver"),
+            "--build=missing",
+            "--settings",
+            "build_type=Release",
+            *(
+                ["--settings", "os.version=" + environment["MACOSX_DEPLOYMENT_TARGET"]]
+                if sys.platform == "darwin"
+                else []
+            ),
+        ]
+        for opt in conan_options:
+            conan_args.extend(["--options", opt])
+        conan_args.extend(["--output-folder", str(output)])
+
         subprocess.run(
-            [
-                conan,
-                "install",
-                str(_ROOT / "exact_solver"),
-                "--build=missing",
-                "--settings",
-                "build_type=Release",
-                *(
-                    ["--settings", "os.version=" + environment["MACOSX_DEPLOYMENT_TARGET"]]
-                    if sys.platform == "darwin"
-                    else []
-                ),
-                "--options",
-                "boost/*:header_only=True",
-                "--output-folder",
-                str(output),
-            ],
+            conan_args,
             cwd=_ROOT,
             env=environment,
             check=True,
         )
+
+        # On Windows: bootstrap Clarabel using powershell script
+        if os.name == "nt":
+            openblas_libs = list(conan_home.glob("**/openblas.lib"))
+            if not openblas_libs:
+                raise RuntimeError("Could not find openblas.lib under Conan home")
+            openblas_lib_path = openblas_libs[0]
+
+            ps_script = _ROOT / "tools" / "bootstrap_clarabel_windows.ps1"
+            subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(ps_script),
+                    str(clarabel_root),
+                    str(openblas_lib_path),
+                    str(temporary_path / "clarabel_build"),
+                ],
+                cwd=_ROOT,
+                env=environment,
+                check=True,
+            )
 
         toolchains = list(output.rglob("conan_toolchain.cmake"))
         if len(toolchains) != 1:
@@ -133,6 +172,7 @@ def _native_build_environment():
                 f"expected one Conan toolchain, found {len(toolchains)} under {output}"
             )
 
+        enable_sdp = "ON" if os.name == "nt" else "OFF"
         baseline = [
             f"-DCMAKE_TOOLCHAIN_FILE:FILEPATH={toolchains[0]}",
             "-DCUTWIDTH_BUILD_PYTHON=ON",
@@ -140,12 +180,14 @@ def _native_build_environment():
             "-DCMAKE_CONFIGURATION_TYPES=Release",
             "-DCUTWIDTH_ENABLE_HIGHS=OFF",
             "-DCUTWIDTH_ENABLE_ONETBB=OFF",
-            "-DCUTWIDTH_ENABLE_SDP_PROTOTYPE=OFF",
+            f"-DCUTWIDTH_ENABLE_SDP_PROTOTYPE={enable_sdp}",
             f"-DCUTWIDTH_BUNDLED_CADICAL_LICENSE:FILEPATH={proof_tools['cadical_license']}",
             f"-DCUTWIDTH_BUNDLED_DRAT_TRIM_LICENSE:FILEPATH={proof_tools['checker_license']}",
             f"-DCUTWIDTH_CADICAL_ROOT:PATH={proof_tools['cadical_root']}",
             f"-DCUTWIDTH_DRAT_TRIM_ROOT:PATH={proof_tools['checker_root']}",
         ]
+        if clarabel_root is not None:
+            baseline.append(f"-DCUTWIDTH_CLARABEL_ROOT:PATH={clarabel_root}")
         if proof_tools["cadical"] is not None:
             baseline.extend((
                 f"-DCUTWIDTH_BUNDLED_CADICAL:FILEPATH={proof_tools['cadical']}",
