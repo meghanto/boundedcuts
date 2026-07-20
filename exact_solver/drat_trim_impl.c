@@ -43,6 +43,8 @@ static int drat_embedded_printf(const char *format, ...) {
 #ifdef _WIN32
 #define getc_unlocked getc
 #include <windows.h>
+#define timeval drat_timeval
+#define gettimeofday drat_gettimeofday
 struct timeval {
     long tv_sec;
     long tv_usec;

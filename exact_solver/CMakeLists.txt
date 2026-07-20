@@ -168,7 +168,9 @@ if(CUTWIDTH_CADICAL_ROOT)
     endif()
 
     target_link_libraries(cutwidth_solver PRIVATE cadical)
-    target_include_directories(cutwidth_solver SYSTEM PRIVATE "${CUTWIDTH_CADICAL_ROOT}/src")
+    # CUTWIDTH_HAVE_CADICAL is public and optimizer_v2.hpp reaches the tracer
+    # type, so consumers compiling that public header need the pinned headers.
+    target_include_directories(cutwidth_solver SYSTEM PUBLIC "${CUTWIDTH_CADICAL_ROOT}/src")
     target_compile_definitions(cutwidth_solver PUBLIC CUTWIDTH_HAVE_CADICAL=1)
     message(STATUS "Pinned native CaDiCaL incremental backend enabled via source compile")
 endif()
