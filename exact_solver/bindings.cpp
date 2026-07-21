@@ -17,6 +17,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <string_view>
 #include <vector>
 
@@ -25,9 +26,13 @@ namespace nb = nanobind;
 namespace {
 
 struct SolveOptions {
-    std::size_t threads = 1;
-    double time_limit = 0.0;
-    std::string controller = "static";
+    // Python is a convenience API: use the host's available execution
+    // capacity by default, while retaining an explicit finite budget.  The
+    // native CLI deliberately keeps its explicit single-thread/unlimited
+    // defaults for scripting compatibility.
+    std::size_t threads = std::max<std::size_t>(1U, std::thread::hardware_concurrency());
+    double time_limit = 300.0;
+    std::string controller = "adaptive";
     std::size_t memory_budget_bytes = std::size_t{16} * 1024U * 1024U * 1024U;
     std::vector<std::string> adaptive_arms{"bounds", "dfs", "alns", "sdp", "residual-dp"};
     bool verify = true;

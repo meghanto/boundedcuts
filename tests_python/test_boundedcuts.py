@@ -75,6 +75,13 @@ def test_option_validation() -> None:
         boundedcuts.solve(graph, controller="mystery")
 
 
+def test_python_solve_options_default_to_bounded_full_allocation() -> None:
+    options = boundedcuts.SolveOptions()
+    assert options.threads >= 1
+    assert options.time_limit == 300.0
+    assert options.controller == "adaptive"
+
+
 def test_capabilities_include_portable_bounds() -> None:
     available = boundedcuts.capabilities()
     assert available["dfs"]

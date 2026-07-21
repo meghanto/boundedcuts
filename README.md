@@ -52,6 +52,12 @@ assert result.optimal and result.lower_bound == result.upper_bound == 2
 print(result.ordering)  # owned, C-contiguous numpy.uint32 array
 ```
 
+`SolveOptions()` defaults to the adaptive controller, all hardware threads,
+and a 300-second limit. Pass `controller=`, `threads=`, or `time_limit=` to
+override these; `time_limit=0` means no time limit. The native `boundedcuts`
+CLI remains explicit: pass `--controller`, `--threads`, and `--time-limit`
+when those policies are wanted.
+
 A C-contiguous `uint32[m, 2]` array is scanned directly without constructing
 Python edge objects or an intermediate C++ edge list. The graph then owns its
 normalized adjacency representation, and the native solve releases the Python
