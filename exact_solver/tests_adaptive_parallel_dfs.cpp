@@ -707,13 +707,14 @@ void primary_first_scheduler_unit_test() {
     std::set<std::uint64_t> primary_generations;
 
     while (std::getline(infile, line)) {
-        bool is_dfs = line.find("\"arm\":\"dfs\"") != std::string::npos ||
+        bool is_dfs = line.find("\"arm\":\"dfs_primary\"") != std::string::npos ||
                       line.find("\"arm\":\"dfs_secondary\"") != std::string::npos;
         if (is_dfs) {
             auto t_pos = line.find("\"threshold\":");
             if (t_pos != std::string::npos) {
                 std::uint32_t th = std::stoul(line.substr(t_pos + 12));
-                std::string arm = (line.find("\"arm\":\"dfs_secondary\"") != std::string::npos) ? "dfs_secondary" : "dfs";
+                std::string arm = (line.find("\"arm\":\"dfs_secondary\"") != std::string::npos)
+                    ? "dfs_secondary" : "dfs_primary";
                 event_thresholds.push_back({arm, th});
                 if (th == 168U) {
                     auto g_pos = line.find("\"session_generation\":");
