@@ -84,7 +84,12 @@ std::uint32_t select_primary_first_threshold(
     if (upper == 0) throw std::invalid_argument("primary-first upper bound must be positive");
     const auto primary = upper - 1U;
     if (lower_live.empty() || service_tick % 4U != 3U) return primary;
-    return lower_live[(service_tick / 4U) % lower_live.size()];
+    // Session maps are intentionally hash-indexed. Normalize only this tiny
+    // admitted set so a checkpoint/resume or allocator layout cannot change
+    // the lower-threshold service order.
+    std::vector<std::uint32_t> ordered(lower_live.begin(), lower_live.end());
+    std::sort(ordered.begin(), ordered.end());
+    return ordered[(service_tick / 4U) % ordered.size()];
 }
 
 std::vector<std::uint32_t> value_aware_threshold_candidates(

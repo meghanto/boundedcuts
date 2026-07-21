@@ -136,7 +136,7 @@ void primary_first_whole_pool_quantum_test() {
                     expected[tick],
                 "primary-first did not preserve its 3:1 full-pool quantum rotation");
 
-    const std::vector<std::uint32_t> two_secondaries{13, 14};
+    const std::vector<std::uint32_t> two_secondaries{14, 13};
     require(cutwidth::select_primary_first_threshold(16, two_secondaries, 3) == 13 &&
                 cutwidth::select_primary_first_threshold(16, two_secondaries, 7) == 14,
             "primary-first did not round-robin admitted lower sessions");
