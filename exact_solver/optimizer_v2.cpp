@@ -2207,10 +2207,21 @@ OptimizerV2Result optimize_connected(const Graph& graph,
             // primary exponentially dominate wall time. Ties use the stable
             // priority above, so the primary remains the preferred exact arm.
             if (options.threshold_scheduler == ThresholdSchedulerMode::primary_first) {
-                // Do not manufacture a portfolio of tiny proof forests.  The
-                // incumbent-adjacent decision owns the pool until its forest
-                // has enough donated work to justify borrowing capacity.
-                threshold = upper - 1U;
+                // Quanta, not fractional worker allocations, express the
+                // portfolio policy.  A wide U-1 forest receives three full
+                // DFS-pool epochs for every one full-pool epoch given to a
+                // live lower threshold.  This keeps the primary persistent
+                // and favored while giving a secondary enough parallelism to
+                // expose its own coarse proof forest.
+                std::vector<std::uint32_t> lower_live;
+                const auto primary = upper - 1U;
+                for (const auto& [candidate, session] : adaptive_sessions) {
+                    if (candidate < primary && candidate >= lower &&
+                        session.status() == SessionStatus::unresolved)
+                        lower_live.push_back(candidate);
+                }
+                threshold = select_primary_first_threshold(primary + 1U, lower_live,
+                                                           adaptive_tick);
                 ++adaptive_tick;
             } else if (options.threshold_scheduler == ThresholdSchedulerMode::value_aware) {
                 auto epoch_retained = retained;
@@ -2451,17 +2462,16 @@ OptimizerV2Result optimize_connected(const Graph& graph,
         decision_options.parallel_cache_shards_per_thread = options.parallel_cache_shards_per_thread;
         decision_options.parallel_runtime = options.parallel_runtime;
         decision_options.use_canonical_ownership = options.use_canonical_ownership;
-        const bool primary_first_primary =
-            options.threshold_scheduler == ThresholdSchedulerMode::primary_first &&
-            threshold + 1U == upper;
-        // An external executor cannot use permits that arrive before a
-        // forest has exposed siblings.  Prime only the wide primary with a
-        // deterministic near-root frontier; lower threshold sessions remain
-        // compact until the controller explicitly admits them.
+        // A primary-first epoch assigns the full DFS pool to exactly one
+        // persistent forest.  Prime that forest deterministically before
+        // dispatch so a newly selected lower threshold can use its whole
+        // service quantum rather than returning mostly empty leases.
         decision_options.cooperative_work_stealing =
-            options.cooperative_work_stealing || primary_first_primary;
+            options.cooperative_work_stealing ||
+            options.threshold_scheduler == ThresholdSchedulerMode::primary_first;
         decision_options.canonical_frontier_bootstrap =
-            options.canonical_frontier_bootstrap || primary_first_primary;
+            options.canonical_frontier_bootstrap ||
+            options.threshold_scheduler == ThresholdSchedulerMode::primary_first;
         decision_options.recursive_coarse_kernel = options.recursive_coarse_kernel;
         decision_options.controller_overhead_fraction =
             options.controller_overhead_fraction;
@@ -2746,9 +2756,10 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 // policy.  Do not create a lower threshold merely because it
                 // exists in the interval: the incumbent-adjacent forest must
                 // first complete two broad epochs, each using at least 95% of
-                // its assigned physical workers.  This is deliberately one
-                // secondary at a time; the 25% permit cap below makes it a
-                // bounded experiment rather than a competing primary.
+                // its assigned physical workers. This is deliberately one
+                // secondary at a time; primary-first later gives an admitted
+                // secondary a bounded, separate full-pool epoch rather than
+                // turning it into a concurrent competing primary.
                 std::optional<std::uint32_t> secondary_to_admit;
                 const auto saturated = [](const AdaptiveSessionEntry& candidate) {
                     return candidate.services >= 2U && candidate.last_worker_allocation != 0 &&
@@ -2756,7 +2767,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                             candidate.last_worker_allocation * 19U;
                 };
                 if (options.threshold_scheduler == ThresholdSchedulerMode::primary_first &&
-                    saturated(entry) && upper >= lower + 3U) {
+                    threshold + 1U == upper && saturated(entry) && upper >= lower + 3U) {
                     const auto first_secondary = upper - 2U;
                     const auto first = adaptive_sessions.find(first_secondary);
                     if (first == adaptive_sessions.end()) {
@@ -2772,10 +2783,8 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                     if (adaptive_sessions.find(secondary_threshold) == adaptive_sessions.end()) {
                         auto secondary_options = decision_options;
                         secondary_options.time_limit = std::chrono::milliseconds{0};
-                        secondary_options.canonical_frontier_bootstrap =
-                            options.canonical_frontier_bootstrap;
-                        secondary_options.cooperative_work_stealing =
-                            options.cooperative_work_stealing;
+                        secondary_options.canonical_frontier_bootstrap = true;
+                        secondary_options.cooperative_work_stealing = true;
 
                         AdaptiveSessionEntry secondary;
                         bool restored_secondary = false;
@@ -2856,7 +2865,8 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 }
                 std::vector<SecondaryDFS> potential_secondaries;
                 for (const auto candidate : pool_candidates) {
-                    if (candidate != threshold) {
+                    if (options.threshold_scheduler != ThresholdSchedulerMode::primary_first &&
+                        candidate != threshold) {
                         auto it = adaptive_sessions.find(candidate);
                         if (it != adaptive_sessions.end()) {
                             auto& other = it->second;
@@ -2867,28 +2877,27 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                     }
                 }
 
-                // Select secondaries greedily in stable persistent-threshold-order.
-                // Do not fragment a wide pool across every retained forest in
-                // one window. The coarse splitter needs enough permits per
-                // forest to expose a useful subtree frontier; the outer
-                // recurrence already rotates all retained thresholds across
-                // subsequent windows. Three concurrent DFS sessions preserve
-                // a persistent primary while K=12/K=13 receive service in the
-                // same window, and leave effective grain at 16/32 threads.
+                // Non-primary-first schedulers may share one window among a
+                // bounded set of retained forests.  Primary-first leaves this
+                // list empty: its selected `entry` alone owns a whole-pool
+                // epoch, and the deterministic outer rotation supplies lower
+                // thresholds with their own full-pool service windows.
                 constexpr std::size_t max_dfs_sessions_per_window = 3;
                 std::vector<SecondaryDFS> selected_secondaries;
-                for (auto& sec : potential_secondaries) {
-                    size_t M_new = selected_secondaries.size() + 1;
-                    if (M_new + 1 > max_dfs_sessions_per_window) break;
-                    if (M_new + 1 <= dfs_slots_available) {
-                        size_t permits_per_dfs = dfs_slots_available / (M_new + 1);
-                        size_t primary_permits = dfs_slots_available - M_new * permits_per_dfs;
-                        if (primary_permits >= minimum_primary) {
-                            selected_secondaries.push_back(sec);
-                            continue;
+                if (options.threshold_scheduler != ThresholdSchedulerMode::primary_first) {
+                    for (auto& sec : potential_secondaries) {
+                        size_t M_new = selected_secondaries.size() + 1;
+                        if (M_new + 1 > max_dfs_sessions_per_window) break;
+                        if (M_new + 1 <= dfs_slots_available) {
+                            size_t permits_per_dfs = dfs_slots_available / (M_new + 1);
+                            size_t primary_permits = dfs_slots_available - M_new * permits_per_dfs;
+                            if (primary_permits >= minimum_primary) {
+                                selected_secondaries.push_back(sec);
+                                continue;
+                            }
                         }
+                        break;
                     }
-                    break;
                 }
 
                 // Calculate final permits.
@@ -2896,19 +2905,8 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 size_t permits_per_dfs = 0;
                 size_t primary_permits = dfs_slots_available;
                 if (M > 0) {
-                    if (options.threshold_scheduler == ThresholdSchedulerMode::primary_first) {
-                        // A borrowed threshold is an experiment, not a peer.
-                        // Keep three quarters of the physically available
-                        // DFS capacity on U-1. Phase C can add another
-                        // secondary only after this one proves useful; each
-                        // then receives at most one fifth of the pool.
-                        permits_per_dfs = std::max<std::size_t>(
-                            1, dfs_slots_available / 5U);
-                        primary_permits = dfs_slots_available - M * permits_per_dfs;
-                    } else {
-                        permits_per_dfs = dfs_slots_available / (M + 1);
-                        primary_permits = dfs_slots_available - M * permits_per_dfs;
-                    }
+                    permits_per_dfs = dfs_slots_available / (M + 1);
+                    primary_permits = dfs_slots_available - M * permits_per_dfs;
                 }
 
                 // Build leases for optional arms
@@ -3596,6 +3594,10 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 trace << "{\"monotonic_milliseconds\":"
                       << std::chrono::duration_cast<std::chrono::milliseconds>(
                              Clock::now() - global_start).count()
+                      << ",\"arm\":\""
+                      << (options.threshold_scheduler == ThresholdSchedulerMode::primary_first &&
+                          threshold + 1U != upper ? "dfs_secondary" : "dfs_primary")
+                      << "\""
                       << ",\"threshold\":" << threshold
                       << ",\"session_generation\":" << traced_generation
                       << ",\"interval_before\":[" << interval_lower_before << ','
@@ -3660,6 +3662,10 @@ OptimizerV2Result optimize_connected(const Graph& graph,
             trace << "{\"monotonic_milliseconds\":"
                   << std::chrono::duration_cast<std::chrono::milliseconds>(
                          Clock::now() - global_start).count()
+                  << ",\"arm\":\""
+                  << (options.threshold_scheduler == ThresholdSchedulerMode::primary_first &&
+                      threshold + 1U != upper ? "dfs_secondary" : "dfs_primary")
+                  << "\""
                   << ",\"threshold\":" << threshold
                   << ",\"session_generation\":" << traced_generation
                   << ",\"interval_before\":[" << interval_lower_before << ','

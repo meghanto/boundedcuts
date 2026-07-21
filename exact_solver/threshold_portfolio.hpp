@@ -55,6 +55,13 @@ private:
 [[nodiscard]] std::size_t select_recurring_threshold(
     std::span<const std::uint64_t> completed_recurrences);
 
+// Primary-first uses whole-pool service quanta: three incumbent-adjacent
+// epochs, followed by one epoch for a live lower threshold.  The caller owns
+// admission; this helper never manufactures a threshold.
+[[nodiscard]] std::uint32_t select_primary_first_threshold(
+    std::uint32_t upper_bound, std::span<const std::uint32_t> lower_live,
+    std::uint64_t service_tick);
+
 // Candidates generator for the value-aware scheduler.
 [[nodiscard]] std::vector<std::uint32_t> value_aware_threshold_candidates(
     std::uint32_t lower_bound, std::uint32_t upper_bound,

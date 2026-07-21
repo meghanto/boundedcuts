@@ -78,6 +78,15 @@ std::size_t select_recurring_threshold(
         std::min_element(completed_recurrences.begin(), completed_recurrences.end())));
 }
 
+std::uint32_t select_primary_first_threshold(
+    std::uint32_t upper, std::span<const std::uint32_t> lower_live,
+    std::uint64_t service_tick) {
+    if (upper == 0) throw std::invalid_argument("primary-first upper bound must be positive");
+    const auto primary = upper - 1U;
+    if (lower_live.empty() || service_tick % 4U != 3U) return primary;
+    return lower_live[(service_tick / 4U) % lower_live.size()];
+}
+
 std::vector<std::uint32_t> value_aware_threshold_candidates(
     std::uint32_t lower, std::uint32_t upper,
     std::span<const std::uint32_t> retained) {

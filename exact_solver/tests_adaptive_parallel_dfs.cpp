@@ -122,6 +122,26 @@ void scheduler_service_and_milestone_invariance_test() {
                 "K=15/K=12/K=13 did not receive recurring interleaved service");
 }
 
+void primary_first_whole_pool_quantum_test() {
+    // Admission is explicit: without a live lower session, the scheduler
+    // cannot synthesize an eager portfolio.
+    for (std::uint64_t tick = 0; tick != 8; ++tick)
+        require(cutwidth::select_primary_first_threshold(16, {}, tick) == 15,
+                "primary-first manufactured an unadmitted threshold");
+
+    const std::vector<std::uint32_t> one_secondary{14};
+    const std::vector<std::uint32_t> expected{15, 15, 15, 14, 15, 15, 15, 14};
+    for (std::uint64_t tick = 0; tick != expected.size(); ++tick)
+        require(cutwidth::select_primary_first_threshold(16, one_secondary, tick) ==
+                    expected[tick],
+                "primary-first did not preserve its 3:1 full-pool quantum rotation");
+
+    const std::vector<std::uint32_t> two_secondaries{13, 14};
+    require(cutwidth::select_primary_first_threshold(16, two_secondaries, 3) == 13 &&
+                cutwidth::select_primary_first_threshold(16, two_secondaries, 7) == 14,
+            "primary-first did not round-robin admitted lower sessions");
+}
+
 void saturated_pool_utilization_test() {
     std::vector<std::uint32_t> trace;
     cutwidth::GlobalDFSExecutor executor(4, std::chrono::milliseconds(20));
@@ -620,15 +640,119 @@ void value_aware_scheduler_unit_tests() {
     }
 }
 
+void primary_first_scheduler_unit_test() {
+    const auto graph = complete_graph(26);
+    cutwidth::OptimizerV2Options options;
+    options.controller = cutwidth::ControllerMode::adaptive;
+    options.proof_backend = cutwidth::ProofBackend::dfs;
+    options.threshold_scheduler = cutwidth::ThresholdSchedulerMode::primary_first;
+    options.threads = 4;
+    options.time_limit = std::chrono::seconds{30};
+    options.failed_state_cache_memory_bytes = 1U << 20;
+    options.adaptive_arms = {"dfs"};
+    options.use_twin_symmetry = false;
+
+    const auto compatibility = cutwidth::adaptive_checkpoint_compatibility(graph, options);
+    cutwidth::AdaptiveCheckpoint checkpoint;
+    checkpoint.graph_hash = compatibility.graph_hash;
+    checkpoint.solver_semantic_hash = compatibility.solver_semantic_hash;
+    checkpoint.proof_policy_hash = compatibility.proof_policy_hash;
+    checkpoint.candidate_order_hash = compatibility.candidate_order_hash;
+    checkpoint.vertex_count = graph.size();
+    checkpoint.ordering.resize(graph.size());
+    for (std::uint32_t vertex = 0; vertex < graph.size(); ++vertex)
+        checkpoint.ordering[vertex] = vertex;
+    checkpoint.lower_bound = 166;
+    checkpoint.upper_bound = 169;
+
+    cutwidth::DecisionOptions decision_options;
+    decision_options.time_limit = std::chrono::milliseconds{0};
+    decision_options.use_failed_state_cache = options.use_failed_state_cache;
+    decision_options.use_twin_symmetry = options.use_twin_symmetry;
+    decision_options.failed_state_cache_limit = options.failed_state_cache_limit;
+    decision_options.failed_state_cache_memory_bytes = options.failed_state_cache_memory_bytes;
+    decision_options.node_state = options.node_state;
+    decision_options.node_order = options.node_order;
+    decision_options.node_memo_depth = options.node_memo_depth;
+    decision_options.node_memo_max_remaining = options.node_memo_max_remaining;
+    decision_options.node_memo_memory_bytes = options.node_memo_memory_bytes;
+    decision_options.use_partial_bounds = options.use_partial_bounds;
+    decision_options.partial_bounds = options.partial_bounds;
+    decision_options.backend = options.backend;
+    decision_options.threads = 4;
+
+    cutwidth::ParallelDecisionSession live(graph, 168U, decision_options, 4, true);
+    auto snapshot = live.quiesce_and_snapshot();
+    snapshot.session_generation = 168U;
+    checkpoint.parallel_sessions.push_back(std::move(snapshot));
+
+    const auto checkpoint_path = std::filesystem::temp_directory_path() / "test-pf-checkpoint.cwcp2";
+    cutwidth::write_adaptive_checkpoint_atomic(checkpoint_path, checkpoint);
+
+    const auto trace_path = std::filesystem::temp_directory_path() / "test-pf-trace.jsonl";
+    if (std::filesystem::exists(trace_path)) {
+        std::filesystem::remove(trace_path);
+    }
+    options.resume = checkpoint_path;
+    options.strategy_trace = trace_path;
+
+    const auto result = cutwidth::optimize_cutwidth_v2(graph, options);
+
+    require(std::filesystem::exists(trace_path), "Strategy trace file was not created");
+
+    std::ifstream infile(trace_path);
+    std::string line;
+    std::vector<std::pair<std::string, std::uint32_t>> event_thresholds;
+    std::vector<std::size_t> worker_allocations;
+    std::set<std::uint64_t> primary_generations;
+
+    while (std::getline(infile, line)) {
+        bool is_dfs = line.find("\"arm\":\"dfs\"") != std::string::npos ||
+                      line.find("\"arm\":\"dfs_secondary\"") != std::string::npos;
+        if (is_dfs) {
+            auto t_pos = line.find("\"threshold\":");
+            if (t_pos != std::string::npos) {
+                std::uint32_t th = std::stoul(line.substr(t_pos + 12));
+                std::string arm = (line.find("\"arm\":\"dfs_secondary\"") != std::string::npos) ? "dfs_secondary" : "dfs";
+                event_thresholds.push_back({arm, th});
+                if (th == 168U) {
+                    auto g_pos = line.find("\"session_generation\":");
+                    if (g_pos != std::string::npos) {
+                        std::uint64_t gen = std::stoull(line.substr(g_pos + 21));
+                        primary_generations.insert(gen);
+                    }
+                }
+            }
+            auto w_pos = line.find("\"worker_allocation\":");
+            if (w_pos != std::string::npos) {
+                std::size_t alloc = std::stoul(line.substr(w_pos + 20));
+                worker_allocations.push_back(alloc);
+            }
+        }
+    }
+    infile.close();
+
+    std::filesystem::remove(checkpoint_path);
+    std::filesystem::remove(trace_path);
+
+    require(!event_thresholds.empty(), "No DFS events recorded in primary-first trace");
+    require(primary_generations.size() == 1, "Primary U-1 session generation changed across epochs");
+    for (const auto alloc : worker_allocations) {
+        require(alloc == 4, "Primary-first epoch worker allocation did not equal full pool permits");
+    }
+}
+
 } // namespace
 
 int main() {
     try {
         value_aware_scheduler_unit_tests();
         scheduler_service_and_milestone_invariance_test();
+        primary_first_whole_pool_quantum_test();
         saturated_pool_utilization_test();
         certified_k12_k13_and_checkpoint_test();
         secondary_trace_visibility_test();
+        primary_first_scheduler_unit_test();
         std::cout << "Adaptive global DFS acceptance tests passed.\n";
         return 0;
     } catch (const std::exception& error) {
