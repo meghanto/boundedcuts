@@ -2959,7 +2959,15 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 primary_req.session = entry.global_parallel;
                 primary_req.threshold = threshold;
                 primary_req.permits = primary_permits;
-                primary_req.work_units = bounded_fragment_work(service_quantum);
+                // Primary-first recurrence records durable service history,
+                // but must not turn that history into an ever-longer wall
+                // slice.  A fixed bounded fragment gives K=15 recurring
+                // priority while guaranteeing an admitted lower forest gets
+                // back to the whole pool inside a finite time budget.
+                const auto epoch_work_quantum =
+                    options.threshold_scheduler == ThresholdSchedulerMode::primary_first
+                        ? std::uint64_t{1} : service_quantum;
+                primary_req.work_units = bounded_fragment_work(epoch_work_quantum);
                 requests.push_back(primary_req);
                 traced_worker_allocation = primary_permits;
 
@@ -2969,7 +2977,9 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                     sec_req.threshold = sec.threshold;
                     sec_req.permits = permits_per_dfs;
                     sec_req.work_units = bounded_fragment_work(
-                        std::max<std::uint64_t>(1, sec.entry->quantum));
+                        options.threshold_scheduler == ThresholdSchedulerMode::primary_first
+                            ? std::uint64_t{1}
+                            : std::max<std::uint64_t>(1, sec.entry->quantum));
                     requests.push_back(sec_req);
                 }
 
