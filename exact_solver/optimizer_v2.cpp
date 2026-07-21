@@ -1702,6 +1702,8 @@ OptimizerV2Result optimize_connected(const Graph& graph,
         std::uint64_t starvation_ticks = 0;
         std::uint64_t cumulative_resolved_regions = 0;
         std::uint64_t cumulative_configured_regions = 0;
+        std::size_t last_workers_used = 0;
+        std::size_t last_worker_allocation = 0;
 
         void cancel() {
             if (serial) serial->cancel();
@@ -1976,6 +1978,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
         std::uint64_t traced_quantum = 0;
         std::uint64_t traced_generation = 0;
         std::size_t traced_workers_used = 0;
+        std::size_t traced_worker_allocation = 0;
         double traced_busy_worker_seconds = 0.0;
         double traced_allocated_worker_seconds = 0.0;
         double traced_service_seconds = 0.0;
@@ -2203,7 +2206,13 @@ OptimizerV2Result optimize_connected(const Graph& graph,
             // frequency bias plus per-arm doubling would otherwise make the
             // primary exponentially dominate wall time. Ties use the stable
             // priority above, so the primary remains the preferred exact arm.
-            if (options.threshold_scheduler == ThresholdSchedulerMode::value_aware) {
+            if (options.threshold_scheduler == ThresholdSchedulerMode::primary_first) {
+                // Do not manufacture a portfolio of tiny proof forests.  The
+                // incumbent-adjacent decision owns the pool until its forest
+                // has enough donated work to justify borrowing capacity.
+                threshold = upper - 1U;
+                ++adaptive_tick;
+            } else if (options.threshold_scheduler == ThresholdSchedulerMode::value_aware) {
                 auto epoch_retained = retained;
                 std::sort(epoch_retained.begin(), epoch_retained.end());
                 epoch_retained.erase(
@@ -2442,8 +2451,17 @@ OptimizerV2Result optimize_connected(const Graph& graph,
         decision_options.parallel_cache_shards_per_thread = options.parallel_cache_shards_per_thread;
         decision_options.parallel_runtime = options.parallel_runtime;
         decision_options.use_canonical_ownership = options.use_canonical_ownership;
-        decision_options.cooperative_work_stealing = options.cooperative_work_stealing;
-        decision_options.canonical_frontier_bootstrap = options.canonical_frontier_bootstrap;
+        const bool primary_first_primary =
+            options.threshold_scheduler == ThresholdSchedulerMode::primary_first &&
+            threshold + 1U == upper;
+        // An external executor cannot use permits that arrive before a
+        // forest has exposed siblings.  Prime only the wide primary with a
+        // deterministic near-root frontier; lower threshold sessions remain
+        // compact until the controller explicitly admits them.
+        decision_options.cooperative_work_stealing =
+            options.cooperative_work_stealing || primary_first_primary;
+        decision_options.canonical_frontier_bootstrap =
+            options.canonical_frontier_bootstrap || primary_first_primary;
         decision_options.recursive_coarse_kernel = options.recursive_coarse_kernel;
         decision_options.controller_overhead_fraction =
             options.controller_overhead_fraction;
@@ -2724,6 +2742,92 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 if (dfs_slots_available < minimum_primary)
                     throw std::logic_error("global controller admission overbooked DFS window");
 
+                // Demand-gated secondary admission for the primary-first
+                // policy.  Do not create a lower threshold merely because it
+                // exists in the interval: the incumbent-adjacent forest must
+                // first complete two broad epochs, each using at least 95% of
+                // its assigned physical workers.  This is deliberately one
+                // secondary at a time; the 25% permit cap below makes it a
+                // bounded experiment rather than a competing primary.
+                std::optional<std::uint32_t> secondary_to_admit;
+                const auto saturated = [](const AdaptiveSessionEntry& candidate) {
+                    return candidate.services >= 2U && candidate.last_worker_allocation != 0 &&
+                        candidate.last_workers_used * 20U >=
+                            candidate.last_worker_allocation * 19U;
+                };
+                if (options.threshold_scheduler == ThresholdSchedulerMode::primary_first &&
+                    saturated(entry) && upper >= lower + 3U) {
+                    const auto first_secondary = upper - 2U;
+                    const auto first = adaptive_sessions.find(first_secondary);
+                    if (first == adaptive_sessions.end()) {
+                        secondary_to_admit = first_secondary;
+                    } else if (upper >= lower + 4U && saturated(first->second)) {
+                        const auto second_secondary = upper - 3U;
+                        if (adaptive_sessions.find(second_secondary) == adaptive_sessions.end())
+                            secondary_to_admit = second_secondary;
+                    }
+                }
+                if (secondary_to_admit) {
+                    const auto secondary_threshold = *secondary_to_admit;
+                    if (adaptive_sessions.find(secondary_threshold) == adaptive_sessions.end()) {
+                        auto secondary_options = decision_options;
+                        secondary_options.time_limit = std::chrono::milliseconds{0};
+                        secondary_options.canonical_frontier_bootstrap =
+                            options.canonical_frontier_bootstrap;
+                        secondary_options.cooperative_work_stealing =
+                            options.cooperative_work_stealing;
+
+                        AdaptiveSessionEntry secondary;
+                        bool restored_secondary = false;
+                        if (auto saved = resumed_parallel_sessions.find(secondary_threshold);
+                            saved != resumed_parallel_sessions.end()) {
+                            secondary.quantum = saved->second.controller_quantum;
+                            secondary.services = saved->second.controller_services;
+                            secondary.generation = saved->second.session_generation;
+                            secondary.parallel = std::make_shared<ParallelDecisionSession>(
+                                graph, saved->second, secondary_options, dfs_worker_slots,
+                                use_global_parallel_dfs);
+                            resumed_parallel_sessions.erase(saved);
+                            restored_secondary = true;
+                        } else if (auto saved = resumed_serial_sessions.find(secondary_threshold);
+                                   saved != resumed_serial_sessions.end()) {
+                            secondary.quantum = saved->second.controller_quantum;
+                            secondary.services = saved->second.controller_services;
+                            secondary.generation = saved->second.session_generation;
+                            ParallelDecisionSnapshot forest;
+                            forest.threshold = secondary_threshold;
+                            forest.status = saved->second.status;
+                            forest.ordering = saved->second.ordering;
+                            forest.regions.push_back({1, 0, std::move(saved->second)});
+                            secondary.parallel = std::make_shared<ParallelDecisionSession>(
+                                graph, forest, secondary_options, dfs_worker_slots,
+                                use_global_parallel_dfs);
+                            resumed_serial_sessions.erase(saved);
+                            restored_secondary = true;
+                        } else {
+                            secondary.parallel = std::make_shared<ParallelDecisionSession>(
+                                graph, secondary_threshold, secondary_options, dfs_worker_slots,
+                                use_global_parallel_dfs);
+                        }
+                        if (secondary.generation == 0)
+                            secondary.generation = next_session_generation++;
+                        else
+                            next_session_generation = std::max(
+                                next_session_generation, secondary.generation + 1U);
+                        if (secondary.parallel && global_dfs_executor &&
+                            secondary.parallel->status() == SessionStatus::unresolved) {
+                            secondary.global_parallel = std::make_shared<ParallelGlobalDFSSession>(
+                                secondary.parallel, std::numeric_limits<std::uint64_t>::max());
+                            global_dfs_executor->register_session(secondary.global_parallel);
+                            (void)global_dfs_executor->bind_session(
+                                secondary.global_parallel, secondary_threshold);
+                        }
+                        adaptive_sessions.emplace(secondary_threshold, std::move(secondary));
+                        if (restored_secondary) ++result.stats.adaptive_session_resumes;
+                        else ++result.stats.adaptive_sessions_created;
+                    }
+                }
+
                 // Identify unresolved retained global DFS sessions in the
                 // same stable order used by the selected scheduler.
                 struct SecondaryDFS {
@@ -2792,8 +2896,19 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 size_t permits_per_dfs = 0;
                 size_t primary_permits = dfs_slots_available;
                 if (M > 0) {
-                    permits_per_dfs = dfs_slots_available / (M + 1);
-                    primary_permits = dfs_slots_available - M * permits_per_dfs;
+                    if (options.threshold_scheduler == ThresholdSchedulerMode::primary_first) {
+                        // A borrowed threshold is an experiment, not a peer.
+                        // Keep three quarters of the physically available
+                        // DFS capacity on U-1. Phase C can add another
+                        // secondary only after this one proves useful; each
+                        // then receives at most one fifth of the pool.
+                        permits_per_dfs = std::max<std::size_t>(
+                            1, dfs_slots_available / 5U);
+                        primary_permits = dfs_slots_available - M * permits_per_dfs;
+                    } else {
+                        permits_per_dfs = dfs_slots_available / (M + 1);
+                        primary_permits = dfs_slots_available - M * permits_per_dfs;
+                    }
                 }
 
                 // Build leases for optional arms
@@ -2848,6 +2963,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 primary_req.permits = primary_permits;
                 primary_req.work_units = bounded_fragment_work(service_quantum);
                 requests.push_back(primary_req);
+                traced_worker_allocation = primary_permits;
 
                 for (auto& sec : selected_secondaries) {
                     GlobalDFSExecutor::EpochAdmitRequest sec_req;
@@ -3127,6 +3243,8 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                         sec.entry->cumulative_allocated_seconds += secondary_event.allocated_worker_seconds;
                         active_secondaries.push_back(sec.threshold);
                     }
+                    sec.entry->last_workers_used = secondary_event.workers_used;
+                    sec.entry->last_worker_allocation = permits_per_dfs;
                     sec.entry->cumulative_resolved_regions = secondary_event.delta.resolved_proof_regions_bound;
                     sec.entry->cumulative_configured_regions = secondary_event.delta.configured_proof_regions_bound;
 
@@ -3286,6 +3404,8 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                 entry.cumulative_busy_seconds += traced_busy_worker_seconds;
                 entry.cumulative_allocated_seconds += traced_allocated_worker_seconds;
             }
+            entry.last_workers_used = traced_workers_used;
+            entry.last_worker_allocation = traced_worker_allocation;
             entry.cumulative_resolved_regions = event_delta.resolved_proof_regions_bound;
             entry.cumulative_configured_regions = event_delta.configured_proof_regions_bound;
 

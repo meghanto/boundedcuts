@@ -24,7 +24,10 @@ enum class HeuristicEvaluation { full, incremental };
 enum class HeuristicTiebreak { width, cut_profile };
 enum class HeuristicSearch { basic, portfolio };
 enum class ControllerMode { static_policy, adaptive };
-enum class ThresholdSchedulerMode { recurrence, value_aware };
+// `primary_first` preserves one incumbent-adjacent DFS forest as the wide
+// primary.  Lower thresholds become secondary work only after that forest has
+// demonstrated a sufficiently broad, useful frontier.
+enum class ThresholdSchedulerMode { recurrence, value_aware, primary_first };
 enum class PbSatRootBackend { embedded, external };
 
 struct MilestoneSnapshot {

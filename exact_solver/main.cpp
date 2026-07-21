@@ -174,7 +174,7 @@ Options:
       --pb-sat-root-max-gap N       Start root proof when U-L <= N (default: 2)
       --threads N           Root-search worker threads; default 1
       --controller MODE     Select static or adaptive; default static
-      --threshold-scheduler MODE  Select recurrence or value-aware; default recurrence
+      --threshold-scheduler MODE  Select recurrence, value-aware, or primary-first; default recurrence
       --milestones LIST     Comma-separated snapshot seconds
       --memory-budget BYTES Total declared memory budget; default 16 GiB
       --residual-dp-max-bytes BYTES  Residual subset-DP admission ceiling; default 256 MiB (0 unlimited)
@@ -501,7 +501,8 @@ Options:
             const auto value = value_after(arg);
             if (value == "recurrence") options.threshold_scheduler = cutwidth::ThresholdSchedulerMode::recurrence;
             else if (value == "value" || value == "value-aware") options.threshold_scheduler = cutwidth::ThresholdSchedulerMode::value_aware;
-            else throw std::invalid_argument("threshold-scheduler must be recurrence or value-aware");
+            else if (value == "primary" || value == "primary-first") options.threshold_scheduler = cutwidth::ThresholdSchedulerMode::primary_first;
+            else throw std::invalid_argument("threshold-scheduler must be recurrence, value-aware, or primary-first");
         } else if (arg == "--milestones") {
             options.milestones.clear();
             for (const auto seconds : parse_size_list(value_after(arg), "milestones")) {
@@ -1906,7 +1907,8 @@ int run(const CliOptions& cli) {
                   << ",\"controller\":\""
                   << (cli.controller == cutwidth::ControllerMode::adaptive ? "adaptive" : "static")
                   << "\",\"threshold_scheduler\":\""
-                  << (cli.threshold_scheduler == cutwidth::ThresholdSchedulerMode::value_aware ? "value-aware" : "recurrence")
+                  << (cli.threshold_scheduler == cutwidth::ThresholdSchedulerMode::value_aware ? "value-aware" :
+                      (cli.threshold_scheduler == cutwidth::ThresholdSchedulerMode::primary_first ? "primary-first" : "recurrence"))
                   << "\",\"controller_events\":" << controller_events
                   << ",\"controller_overhead_seconds\":" << controller_overhead_seconds
                   << ",\"adaptive_sessions_created\":" << adaptive_sessions_created
