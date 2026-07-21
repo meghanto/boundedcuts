@@ -3602,7 +3602,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                       << interval_upper_before << "]"
                       << ",\"interval_after\":[" << lower << ',' << upper << "]"
                       << ",\"service_quantum\":" << traced_quantum
-                      << ",\"worker_allocation\":" << dfs_worker_slots
+                      << ",\"worker_allocation\":" << traced_worker_allocation
                       << ",\"workers_used\":" << traced_workers_used
                       << ",\"incumbent_worker_allocation\":"
                       << (traced_incumbent_concurrent ? 1 : 0)
@@ -3666,7 +3666,7 @@ OptimizerV2Result optimize_connected(const Graph& graph,
                   << interval_upper_before << "]"
                   << ",\"interval_after\":[" << lower << ',' << upper << "]"
                   << ",\"service_quantum\":" << traced_quantum
-                  << ",\"worker_allocation\":" << dfs_worker_slots
+                  << ",\"worker_allocation\":" << traced_worker_allocation
                   << ",\"workers_used\":" << traced_workers_used
                   << ",\"incumbent_worker_allocation\":"
                   << (traced_incumbent_concurrent ? 1 : 0)
